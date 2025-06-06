@@ -233,4 +233,14 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
+app.get('/debug/drop-password-constraint', async (req, res) => {
+  try {
+    await pool.query('ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;');
+    res.send('✅ password_hash column is now optional');
+  } catch (err) {
+    res.status(500).send('❌ Failed: ' + err.message);
+  }
+});
+
+
 startServer().catch(console.error);
