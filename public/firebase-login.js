@@ -1,9 +1,18 @@
-<!-- Load Firebase libraries -->
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js"></script>
+// Load Firebase libraries dynamically
+const loadFirebase = async () => {
+  const firebaseApp = document.createElement("script");
+  firebaseApp.src = "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  document.head.appendChild(firebaseApp);
 
-<script>
-  // STEP 1: Initialize Firebase (fill in with YOUR values from the Firebase snippet)
+  const firebaseAuth = document.createElement("script");
+  firebaseAuth.src = "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  document.head.appendChild(firebaseAuth);
+
+  await new Promise((resolve) => {
+    firebaseAuth.onload = resolve;
+  });
+
+  // Initialize Firebase (fill in YOUR actual values)
   const firebaseConfig = {
     apiKey: "AIzaSyDdrj7bG7Nl_B63ReKOtgKO8xK-KRlVpgA",
     authDomain: "emailytics-firebase.firebaseapp.com",
@@ -14,15 +23,15 @@
   firebase.initializeApp(firebaseConfig);
   const auth = firebase.auth();
 
-  // STEP 2: Google Login Function
-  async function loginWithGoogle() {
+  // Google Sign-In
+  const loginWithGoogle = async () => {
     const provider = new firebase.auth.GoogleAuthProvider();
     try {
       const result = await auth.signInWithPopup(provider);
       const user = result.user;
       const idToken = await user.getIdToken();
 
-      // STEP 3: Send ID token to your backend
+      // Send ID token to your backend
       await fetch("https://your-backend-url.com/api/auth", {
         method: "POST",
         headers: {
@@ -32,18 +41,19 @@
         body: JSON.stringify({ email: user.email }),
       });
 
-      // Redirect or show success message
       alert("Logged in!");
     } catch (err) {
       console.error("Login failed", err);
     }
-  }
+  };
 
-  // STEP 4: Attach to button in Webflow
+  // Attach to Webflow button
   document.addEventListener("DOMContentLoaded", function () {
     const loginButton = document.getElementById("login-button");
     if (loginButton) {
       loginButton.addEventListener("click", loginWithGoogle);
     }
   });
-</script>
+};
+
+loadFirebase();
