@@ -10,6 +10,7 @@ const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
+app.set('trust proxy', 1); // trust first proxy (Railway)
 const port = process.env.PORT || 3000;
 
 const pool = new Pool({
@@ -129,6 +130,23 @@ app.get('/auth/profile', authenticateSupabaseToken, (req, res) => {
 app.post('/payments/create-checkout-session', authenticateSupabaseToken, async (req, res) => {
   try {
     const { priceId } = req.body;
+
+    // 🔧 If user has no Stripe customer ID, create one
+    if (!req.user.stripe_customer_id || req.user.stripe_customer_id.trim() === '') {
+      const customer = await stripeClient.customers.create({
+        email: req.user.email
+      });
+
+      // 💾 Save the new Stripe customer ID to your database
+      await pool.query(
+        'UPDATE users SET stripe_customer_id = $1 WHERE id = $2',
+        [customer.id, req.user.id]
+      );
+
+      req.user.stripe_customer_id = customer.id; // update for session use
+    }
+
+    // ✅ Create Stripe checkout session
     const session = await stripeClient.checkout.sessions.create({
       customer: req.user.stripe_customer_id,
       payment_method_types: ['card'],
@@ -138,6 +156,7 @@ app.post('/payments/create-checkout-session', authenticateSupabaseToken, async (
       cancel_url: `${process.env.FRONTEND_URL}/pricing?canceled=true`,
       metadata: { userId: req.user.id.toString() }
     });
+
     res.json({ sessionId: session.id });
   } catch (error) {
     console.error('❌ Stripe checkout error:', error);
