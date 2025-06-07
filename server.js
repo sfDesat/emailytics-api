@@ -1,6 +1,7 @@
 // server.js - Supabase Integrated Email Analysis Backend
 const express = require('express');
 const cors = require('cors');
+const buildClaudePrompt = require('./buildClaudePrompt');
 const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 const { Anthropic } = require('@anthropic-ai/sdk');
@@ -181,10 +182,11 @@ app.post('/analyze-email', authenticateSupabaseToken, async (req, res) => {
     const existing = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1 AND user_id = $2', [emailHash, req.user.id]);
     if (existing.rows.length > 0) return res.json({ ...existing.rows[0], cached: true });
 
-    const prompt = `Analyze this email and return ONLY a valid JSON object with these exact fields:\nSender: ${sender}\nSubject: ${subject}\nContent: ${emailContent}`;
+    const prompt = buildClaudePrompt({ sender, subject, emailContent });
     const response = await anthropic.messages.create({ model: 'claude-3-haiku-20240307', max_tokens: 1000, messages: [{ role: 'user', content: prompt }] });
     const analysis = JSON.parse(response.content[0].text);
     analysis.processed_at = new Date().toISOString();
+    console.log('Claude raw output:', response.content[0].text);
 
     await pool.query(`INSERT INTO email_analyses (user_id, email_hash, sender, subject, email_content, urgency, response_pressure, action_type, has_money_request, money_details, ai_confidence, sentiment) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, [req.user.id, emailHash, sender, subject, emailContent, analysis.urgency, analysis.response_pressure, analysis.action_type, analysis.has_money_request, analysis.money_details, analysis.ai_confidence, analysis.sentiment]);
     await pool.query('UPDATE users SET emails_analyzed_this_month = emails_analyzed_this_month + 1 WHERE id = $1', [req.user.id]);
