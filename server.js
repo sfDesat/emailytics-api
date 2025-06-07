@@ -1,7 +1,7 @@
 // server.js - Supabase Integrated Email Analysis Backend
 const express = require('express');
 const cors = require('cors');
-const buildClaudePrompt = require('./buildClaudePrompt');
+const buildClaudePrompt = require('./utils/claudePrompt');
 const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 const { Anthropic } = require('@anthropic-ai/sdk');
