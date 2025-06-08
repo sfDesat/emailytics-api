@@ -127,43 +127,6 @@ app.get('/auth/profile', authenticateSupabaseToken, (req, res) => {
   res.json({ user: req.user });
 });
 
-app.post('/payments/create-checkout-session', authenticateSupabaseToken, async (req, res) => {
-  try {
-    const { priceId } = req.body;
-
-    // 🔧 If user has no Stripe customer ID, create one
-    if (!req.user.stripe_customer_id || req.user.stripe_customer_id.trim() === '') {
-      const customer = await stripeClient.customers.create({
-        email: req.user.email
-      });
-
-      // 💾 Save the new Stripe customer ID to your database
-      await pool.query(
-        'UPDATE users SET stripe_customer_id = $1 WHERE id = $2',
-        [customer.id, req.user.id]
-      );
-
-      req.user.stripe_customer_id = customer.id; // update for session use
-    }
-
-    // ✅ Create Stripe checkout session
-    const session = await stripeClient.checkout.sessions.create({
-      customer: req.user.stripe_customer_id,
-      payment_method_types: ['card'],
-      line_items: [{ price: priceId, quantity: 1 }],
-      mode: 'subscription',
-      success_url: `${process.env.FRONTEND_URL}/dashboard?success=true`,
-      cancel_url: `${process.env.FRONTEND_URL}/pricing?canceled=true`,
-      metadata: { userId: req.user.id.toString() }
-    });
-
-    res.json({ sessionId: session.id });
-  } catch (error) {
-    console.error('❌ Stripe checkout error:', error);
-    res.status(500).json({ error: 'Stripe session failed' });
-  }
-});
-
 app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   try {
