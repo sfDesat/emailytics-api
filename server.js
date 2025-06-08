@@ -129,36 +129,106 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (r
   try {
     const event = stripeClient.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
 
-    switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object;
-        const email = session.customer_email;
+switch (event.type) {
+  case 'checkout.session.completed': {
+    const session = event.data.object;
+    const email = session.customer_email;
 
-        if (!email) return res.status(400).send('Missing customer email');
+    if (!email) return res.status(400).send('Missing customer email');
 
-        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-        const user = result.rows[0];
-        if (!user) return res.status(404).send('User not found');
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).send('User not found');
 
-        const subscription = await stripeClient.subscriptions.retrieve(session.subscription);
+    const subscription = await stripeClient.subscriptions.retrieve(session.subscription);
 
-        await pool.query('UPDATE users SET plan = $1 WHERE id = $2', ['paid', user.id]);
-        await pool.query(
-          'INSERT INTO subscriptions (user_id, stripe_subscription_id, status, current_period_start, current_period_end) VALUES ($1, $2, $3, $4, $5)',
-          [user.id, subscription.id, subscription.status, new Date(subscription.current_period_start * 1000), new Date(subscription.current_period_end * 1000)]
-        );
-        break;
-      }
+    await pool.query('UPDATE users SET plan = $1, stripe_customer_id = $2 WHERE id = $3', [
+      'paid',
+      subscription.customer,
+      user.id
+    ]);
 
-      case 'customer.subscription.deleted': {
-        const sub = event.data.object;
-        const customerId = sub.customer;
-        const subId = sub.id;
-        await pool.query('UPDATE users SET plan = $1 WHERE stripe_customer_id = $2', ['free', customerId]);
-        await pool.query('UPDATE subscriptions SET status = $1 WHERE stripe_subscription_id = $2', ['canceled', subId]);
-        break;
-      }
+    await pool.query(
+      `INSERT INTO subscriptions (user_id, stripe_subscription_id, status, current_period_start, current_period_end)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+         status = EXCLUDED.status,
+         current_period_start = EXCLUDED.current_period_start,
+         current_period_end = EXCLUDED.current_period_end`,
+      [
+        user.id,
+        subscription.id,
+        subscription.status,
+        new Date(subscription.current_period_start * 1000),
+        new Date(subscription.current_period_end * 1000)
+      ]
+    );
+    break;
+  }
+
+  case 'invoice.payment_succeeded': {
+    const invoice = event.data.object;
+    const subscription = await stripeClient.subscriptions.retrieve(invoice.subscription);
+    const customerId = invoice.customer;
+
+    const result = await pool.query('SELECT * FROM users WHERE stripe_customer_id = $1', [customerId]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).send('User not found');
+
+    await pool.query('UPDATE users SET plan = $1 WHERE id = $2', ['paid', user.id]);
+    break;
+  }
+
+  case 'invoice.payment_failed': {
+    const invoice = event.data.object;
+    const customerId = invoice.customer;
+
+    const result = await pool.query('SELECT * FROM users WHERE stripe_customer_id = $1', [customerId]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).send('User not found');
+
+    await pool.query('UPDATE users SET plan = $1 WHERE id = $2', ['free', user.id]);
+    break;
+  }
+
+  case 'customer.subscription.updated': {
+    const sub = event.data.object;
+    const customerId = sub.customer;
+    const subId = sub.id;
+    const status = sub.status;
+
+    const result = await pool.query('SELECT * FROM users WHERE stripe_customer_id = $1', [customerId]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).send('User not found');
+
+    if (status !== 'active') {
+      await pool.query('UPDATE users SET plan = $1 WHERE id = $2', ['free', user.id]);
     }
+
+    await pool.query(
+      `UPDATE subscriptions
+       SET status = $1, current_period_start = $2, current_period_end = $3
+       WHERE stripe_subscription_id = $4`,
+      [
+        status,
+        new Date(sub.current_period_start * 1000),
+        new Date(sub.current_period_end * 1000),
+        subId
+      ]
+    );
+    break;
+  }
+
+  case 'customer.subscription.deleted': {
+    const sub = event.data.object;
+    const customerId = sub.customer;
+    const subId = sub.id;
+
+    await pool.query('UPDATE users SET plan = $1 WHERE stripe_customer_id = $2', ['free', customerId]);
+    await pool.query('UPDATE subscriptions SET status = $1 WHERE stripe_subscription_id = $2', ['canceled', subId]);
+    break;
+  }
+}
 
     res.json({ received: true });
   } catch (err) {
