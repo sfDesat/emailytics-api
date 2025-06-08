@@ -5,12 +5,11 @@ const buildClaudePrompt = require('./utils/claudePrompt');
 const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 const { Anthropic } = require('@anthropic-ai/sdk');
-const stripe = require('stripe');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
-app.set('trust proxy', 1); // trust first proxy (Railway)
+app.set('trust proxy', 1);
 const port = process.env.PORT || 3000;
 
 const pool = new Pool({
@@ -19,7 +18,6 @@ const pool = new Pool({
 });
 
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
-const stripeClient = stripe(process.env.STRIPE_SECRET_KEY);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:3000', credentials: true }));
@@ -37,10 +35,7 @@ const authenticateSupabaseToken = async (req, res, next) => {
 
     const dbUser = await pool.query('SELECT * FROM users WHERE email = $1', [user.email]);
     if (dbUser.rows.length === 0) {
-      const inserted = await pool.query(
-        'INSERT INTO users (email) VALUES ($1) RETURNING *',
-        [user.email]
-      );
+      const inserted = await pool.query('INSERT INTO users (email) VALUES ($1) RETURNING *', [user.email]);
       req.user = inserted.rows[0];
     } else {
       req.user = dbUser.rows[0];
@@ -127,82 +122,7 @@ app.get('/auth/profile', authenticateSupabaseToken, (req, res) => {
   res.json({ user: req.user });
 });
 
-app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  try {
-    const event = stripeClient.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-    switch (event.type) {
-      case 'checkout.session.completed':
-        const session = event.data.object;
-        const userId = session.metadata.userId;
-        await pool.query('UPDATE users SET plan = $1 WHERE id = $2', ['paid', userId]);
-        const subscription = await stripeClient.subscriptions.retrieve(session.subscription);
-        await pool.query(`INSERT INTO subscriptions (user_id, stripe_subscription_id, status, current_period_start, current_period_end) VALUES ($1, $2, $3, $4, $5)`, [userId, subscription.id, subscription.status, new Date(subscription.current_period_start * 1000), new Date(subscription.current_period_end * 1000)]);
-        break;
-      case 'customer.subscription.deleted':
-        const deletedSub = event.data.object;
-        await pool.query('UPDATE users SET plan = $1 WHERE stripe_customer_id = $2', ['free', deletedSub.customer]);
-        await pool.query('UPDATE subscriptions SET status = $1 WHERE stripe_subscription_id = $2', ['canceled', deletedSub.id]);
-        break;
-    }
-    res.json({ received: true });
-  } catch (err) {
-    console.error('❌ Webhook error:', err);
-    res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-});
-
-app.post('/analyze-email', authenticateSupabaseToken, async (req, res) => {
-  try {
-    const { emailContent, sender, subject } = req.body;
-    if (!emailContent) return res.status(400).json({ error: 'Missing email content' });
-    await resetMonthlyCountIfNeeded(req.user.id);
-    const usage = await pool.query('SELECT plan, emails_analyzed_this_month FROM users WHERE id = $1', [req.user.id]);
-    const monthlyLimit = usage.rows[0].plan === 'free' ? 50 : 10000;
-    if (usage.rows[0].emails_analyzed_this_month >= monthlyLimit) return res.status(429).json({ error: 'Monthly limit reached' });
-    const emailHash = generateEmailHash(emailContent, sender || '', subject || '');
-    const existing = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1 AND user_id = $2', [emailHash, req.user.id]);
-    if (existing.rows.length > 0) return res.json({ ...existing.rows[0], cached: true });
-
-    const prompt = buildClaudePrompt({ sender, subject, emailContent });
-    const response = await anthropic.messages.create({ model: 'claude-3-haiku-20240307', max_tokens: 1000, messages: [{ role: 'user', content: prompt }] });
-    const analysis = JSON.parse(response.content[0].text);
-    analysis.processed_at = new Date().toISOString();
-    console.log('Claude raw output:', response.content[0].text);
-
-    await pool.query(`INSERT INTO email_analyses (user_id, email_hash, sender, subject, email_content, urgency, response_pressure, action_type, has_money_request, money_details, ai_confidence, sentiment) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, [req.user.id, emailHash, sender, subject, emailContent, analysis.urgency, analysis.response_pressure, analysis.action_type, analysis.has_money_request, analysis.money_details, analysis.ai_confidence, analysis.sentiment]);
-    await pool.query('UPDATE users SET emails_analyzed_this_month = emails_analyzed_this_month + 1 WHERE id = $1', [req.user.id]);
-    res.json(analysis);
-  } catch (error) {
-    console.error('❌ Analysis error:', error);
-    res.status(500).json({ error: 'Failed to analyze email' });
-  }
-});
-
-app.get('/analyses/history', authenticateSupabaseToken, async (req, res) => {
-  try {
-    const { page = 1, limit = 20 } = req.query;
-    const offset = (page - 1) * limit;
-    const history = await pool.query('SELECT id, sender, subject, urgency, response_pressure, action_type, has_money_request, sentiment, processed_at FROM email_analyses WHERE user_id = $1 ORDER BY processed_at DESC LIMIT $2 OFFSET $3', [req.user.id, limit, offset]);
-    const count = await pool.query('SELECT COUNT(*) FROM email_analyses WHERE user_id = $1', [req.user.id]);
-    res.json({ analyses: history.rows, total: parseInt(count.rows[0].count), page: parseInt(page), limit: parseInt(limit) });
-  } catch (error) {
-    console.error('❌ History error:', error);
-    res.status(500).json({ error: 'Failed to fetch history' });
-  }
-});
-
-app.get('/usage/stats', authenticateSupabaseToken, async (req, res) => {
-  try {
-    await resetMonthlyCountIfNeeded(req.user.id);
-    const stats = await pool.query('SELECT plan, emails_analyzed_this_month FROM users WHERE id = $1', [req.user.id]);
-    const monthlyLimit = stats.rows[0].plan === 'free' ? 50 : 10000;
-    res.json({ plan: stats.rows[0].plan, emails_analyzed_this_month: stats.rows[0].emails_analyzed_this_month, monthly_limit: monthlyLimit });
-  } catch (error) {
-    console.error('❌ Stats error:', error);
-    res.status(500).json({ error: 'Failed to fetch usage stats' });
-  }
-});
+// Removed Stripe session generation route
 
 async function startServer() {
   await initializeDatabase();
