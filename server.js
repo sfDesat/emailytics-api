@@ -22,7 +22,13 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const stripeClient = stripe(process.env.STRIPE_SECRET_KEY);
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
-app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: true }));
+app.use(cors({
+  origin: [
+    'https://mail.google.com', // allow Gmail extension context
+    process.env.FRONTEND_URL   // allow your own frontend
+  ],
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
