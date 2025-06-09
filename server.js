@@ -40,62 +40,6 @@ const PLAN_LIMITS = {
 
 async function initializeDatabase() {
   try {
-
-    await pool.query(`
-      DO $$
-      BEGIN
-        BEGIN
-          ALTER TABLE email_analyses DROP COLUMN urgency;
-        EXCEPTION WHEN undefined_column THEN NULL; END;
-        
-        BEGIN
-          ALTER TABLE email_analyses DROP COLUMN response_pressure;
-        EXCEPTION WHEN undefined_column THEN NULL; END;
-        
-        BEGIN
-          ALTER TABLE email_analyses DROP COLUMN action_type;
-        EXCEPTION WHEN undefined_column THEN NULL; END;
-        
-        BEGIN
-          ALTER TABLE email_analyses DROP COLUMN has_money_request;
-        EXCEPTION WHEN undefined_column THEN NULL; END;
-        
-        BEGIN
-          ALTER TABLE email_analyses DROP COLUMN money_details;
-        EXCEPTION WHEN undefined_column THEN NULL; END;
-        
-        BEGIN
-          ALTER TABLE email_analyses ADD COLUMN IF NOT EXISTS priority VARCHAR(10);
-        END;
-        
-        BEGIN
-          ALTER TABLE email_analyses ADD COLUMN IF NOT EXISTS intent TEXT;
-        END;
-        
-        BEGIN
-          ALTER TABLE email_analyses ADD COLUMN IF NOT EXISTS tone VARCHAR(20);
-        END;
-        
-        BEGIN
-          ALTER TABLE email_analyses ADD COLUMN IF NOT EXISTS sentiment VARCHAR(20);
-        END;
-        
-        BEGIN
-          ALTER TABLE email_analyses ADD COLUMN IF NOT EXISTS tasks TEXT[];
-        END;
-        
-        BEGIN
-          ALTER TABLE email_analyses ADD COLUMN IF NOT EXISTS deadline DATE;
-        END;
-        
-        BEGIN
-          ALTER TABLE email_analyses ADD COLUMN IF NOT EXISTS confidence INTEGER;
-        END;
-      END
-      $$;
-    `);
-        
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -212,6 +156,9 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     });
 
     const parsed = JSON.parse(completion.content[0].text);
+
+    // Convert "null" string to actual null value for deadline
+    if (parsed.deadline === "null") parsed.deadline = null;
     await pool.query(`
       INSERT INTO email_analyses (user_id, email_hash, sender, subject, email_content, priority, intent, tone, sentiment, tasks, deadline, ai_confidence)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
