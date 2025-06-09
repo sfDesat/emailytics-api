@@ -60,13 +60,13 @@ async function initializeDatabase() {
         sender VARCHAR(255),
         subject TEXT,
         email_content TEXT NOT NULL,
-        urgency INTEGER,
-        response_pressure VARCHAR(50),
-        action_type VARCHAR(50),
-        has_money_request BOOLEAN,
-        money_details JSONB,
         ai_confidence INTEGER,
         sentiment VARCHAR(50),
+        priority VARCHAR(50),
+        intent TEXT,
+        tone VARCHAR(50),
+        tasks JSONB,
+        deadline DATE,
         processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`);
 
@@ -147,7 +147,7 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     const exists = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1', [emailHash]);
     if (exists.rows.length) return res.json(exists.rows[0]);
 
-    const prompt = buildClaudePrompt(email_content, sender, subject);
+    const prompt = buildClaudePrompt({ sender, subject, emailContent: email_content });
     const completion = await anthropic.messages.create({
       model: 'claude-3-haiku-20240307',
       max_tokens: 1000,
@@ -157,9 +157,34 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
 
     const parsed = JSON.parse(completion.content[0].text);
     await pool.query(`
-      INSERT INTO email_analyses (user_id, email_hash, sender, subject, email_content, urgency, response_pressure, action_type, has_money_request, money_details, ai_confidence, sentiment)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-      [req.user.id, emailHash, sender, subject, email_content, parsed.urgency, parsed.response_pressure, parsed.action_type, parsed.has_money_request, parsed.money_details, parsed.ai_confidence, parsed.sentiment]
+      INSERT INTO email_analyses (
+        user_id,
+        email_hash,
+        sender,
+        subject,
+        email_content,
+        ai_confidence,
+        sentiment,
+        priority,
+        intent,
+        tone,
+        tasks,
+        deadline
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        req.user.id,
+        emailHash,
+        sender,
+        subject,
+        email_content,
+        parsed.confidence,
+        parsed.sentiment,
+        parsed.priority,
+        parsed.intent,
+        parsed.tone,
+        parsed.tasks ? JSON.stringify(parsed.tasks) : null,
+        parsed.deadline || null
+      ]
     );
 
     await pool.query('UPDATE users SET emails_analyzed_this_month = emails_analyzed_this_month + 1 WHERE id = $1', [req.user.id]);

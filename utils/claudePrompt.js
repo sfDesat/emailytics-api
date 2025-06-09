@@ -1,17 +1,18 @@
 module.exports = function buildClaudePrompt({ sender, subject, emailContent }) {
-  return `Analyze this email and return ONLY a valid JSON object with these exact fields:
-- urgency: number from 1-10 (10 = extremely urgent)
-- response_pressure: "none", "low", "medium", "high"  
-- action_type: "information", "question", "request", "task", "feedback", or "meeting"
-- has_money_request: true or false
-- money_details: object with amount, due_date, type (null if no money involved)
-- ai_confidence: number from 1-10
-- sentiment: "positive", "neutral", "negative", or "mixed"
+  return `You are an expert email assistant. Analyze the email message below and return a structured JSON response with the following fields:
+
+1. "priority": What is the urgency of the email? Choose: "High", "Medium", or "Low".
+2. "intent": What is the sender’s main intention? (e.g., scheduling, requesting info, following up, etc.)
+3. "tone": Describe the tone. Choose from: "Professional", "Polite", "Casual", "Frustrated", "Excited", "Demanding", or "Neutral".
+4. "sentiment": Is the sentiment positive, neutral, or negative?
+5. "tasks": A list of action items the sender is requesting. Write each clearly as a task.
+6. "deadline": If a deadline is mentioned, extract it in ISO 8601 format (e.g., "2025-06-09"). If no deadline is present, write "null".
+7. "confidence": From 0 to 100, how confident are you in your ability to correctly extract the information from this email? Consider clarity, length, grammar, and structure.
+
+Only return a JSON object. Do not explain your reasoning.
 
 Email Details:
 Sender: ${sender || 'Unknown'}
 Subject: ${subject || 'No subject'}
-Content: ${emailContent}
-
-Return only the JSON, no other text.`;
+Content: ${emailContent}`;
 };
