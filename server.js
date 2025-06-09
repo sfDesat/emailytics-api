@@ -22,6 +22,11 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const stripeClient = stripe(process.env.STRIPE_SECRET_KEY);
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
+
+function truncateToWords(text, wordLimit) {
+  return text.split(/\s+/).slice(0, wordLimit).join(" ");
+}
+
 app.use(cors({
   origin: [
     'https://mail.google.com',
@@ -140,6 +145,8 @@ app.get('/auth/profile', authenticateSupabaseToken, (req, res) => {
 app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
   try {
     const { email_content, sender, subject } = req.body;
+    
+    
     await resetMonthlyCountIfNeeded(req.user.id);
     enforcePlanLimit(req.user);
 
@@ -147,7 +154,7 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     const exists = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1', [emailHash]);
     if (exists.rows.length) return res.json(exists.rows[0]);
 
-    const prompt = buildClaudePrompt({ sender, subject, emailContent: email_content });
+    const prompt = buildClaudePrompt({ sender, subject, emailContent: truncatedContent });
     const completion = await anthropic.messages.create({
       model: 'claude-3-haiku-20240307',
       max_tokens: 1000,
@@ -157,8 +164,16 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
 
     const parsed = JSON.parse(completion.content[0].text);
 
-    // Convert "null" string to actual null value for deadline
-    if (parsed.deadline === "null") parsed.deadline = null;
+    
+    if (Array.isArray(parsed.tasks)) {
+      const joinedTasks = parsed.tasks.join('; ');
+      if (joinedTasks.length > 300) {
+        parsed.tasks = joinedTasks.slice(0, 300).split(';').map(t => t.trim()).filter(Boolean);
+      }
+    }
+// Normalize deadline
+    parsed.deadline = parsed.deadline === "null" || !parsed.deadline ? null : parsed.deadline;
+
     await pool.query(`
       INSERT INTO email_analyses (user_id, email_hash, sender, subject, email_content, priority, intent, tone, sentiment, tasks, deadline, ai_confidence)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
