@@ -24,8 +24,8 @@ const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 app.use(cors({
   origin: [
-    'https://mail.google.com', // allow Gmail extension context
-    process.env.FRONTEND_URL   // allow your own frontend
+    'https://mail.google.com',
+    process.env.FRONTEND_URL
   ],
   credentials: true
 }));
@@ -60,13 +60,13 @@ async function initializeDatabase() {
         sender VARCHAR(255),
         subject TEXT,
         email_content TEXT NOT NULL,
-        ai_confidence INTEGER,
-        sentiment VARCHAR(50),
         priority VARCHAR(50),
         intent TEXT,
         tone VARCHAR(50),
-        tasks JSONB,
+        sentiment VARCHAR(50),
+        tasks TEXT[],
         deadline DATE,
+        ai_confidence INTEGER,
         processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`);
 
@@ -157,34 +157,9 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
 
     const parsed = JSON.parse(completion.content[0].text);
     await pool.query(`
-      INSERT INTO email_analyses (
-        user_id,
-        email_hash,
-        sender,
-        subject,
-        email_content,
-        ai_confidence,
-        sentiment,
-        priority,
-        intent,
-        tone,
-        tasks,
-        deadline
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [
-        req.user.id,
-        emailHash,
-        sender,
-        subject,
-        email_content,
-        parsed.confidence,
-        parsed.sentiment,
-        parsed.priority,
-        parsed.intent,
-        parsed.tone,
-        parsed.tasks ? JSON.stringify(parsed.tasks) : null,
-        parsed.deadline || null
-      ]
+      INSERT INTO email_analyses (user_id, email_hash, sender, subject, email_content, priority, intent, tone, sentiment, tasks, deadline, ai_confidence)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [req.user.id, emailHash, sender, subject, email_content, parsed.priority, parsed.intent, parsed.tone, parsed.sentiment, parsed.tasks, parsed.deadline, parsed.confidence]
     );
 
     await pool.query('UPDATE users SET emails_analyzed_this_month = emails_analyzed_this_month + 1 WHERE id = $1', [req.user.id]);
