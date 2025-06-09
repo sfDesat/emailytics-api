@@ -81,9 +81,6 @@ async function initializeDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`);
 
-    await pool.query(`ALTER TABLE email_analyses DROP COLUMN IF EXISTS email_content, DROP COLUMN IF EXISTS sender`);
-
-
     console.log('✅ Database initialized');
   } catch (err) {
     console.error('❌ DB init error:', err);
@@ -164,10 +161,14 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     parsed.deadline = parsed.deadline === "null" || !parsed.deadline ? null : parsed.deadline;
 
     await pool.query(`
-      INSERT INTO email_analyses (user_id, email_hash, sender, subject, email_content, priority, intent, tone, sentiment, tasks, deadline, ai_confidence)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-      [req.user.id, emailHash, null, subject, null, parsed.priority, parsed.intent, parsed.tone, parsed.sentiment, parsed.tasks, parsed.deadline, parsed.confidence]
+      INSERT INTO email_analyses (
+        user_id, email_hash, subject, priority, intent, tone,
+        sentiment, tasks, deadline, ai_confidence
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [req.user.id, emailHash, subject, parsed.priority, parsed.intent, parsed.tone,
+       parsed.sentiment, parsed.tasks, parsed.deadline, parsed.confidence]
     );
+
 
     await pool.query('UPDATE users SET emails_analyzed_this_month = emails_analyzed_this_month + 1 WHERE id = $1', [req.user.id]);
 
