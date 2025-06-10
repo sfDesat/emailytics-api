@@ -150,7 +150,7 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     const prompt = buildClaudePrompt({ sender, subject, emailContent: email_content });
     const completion = await anthropic.messages.create({
       model: 'claude-3-haiku-20240307',
-      max_tokens: 1000,
+      max_tokens: 1300,
       temperature: 0.5,
       messages: [{ role: 'user', content: prompt }]
     });
