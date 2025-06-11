@@ -142,6 +142,20 @@ app.get('/auth/profile', authenticateSupabaseToken, (req, res) => {
   res.json({ user: req.user });
 });
 
+app.get('/plan', authenticateSupabaseToken, (req, res) => {
+  res.json({ plan: req.user.plan });
+});
+
+app.delete('/delete-account', authenticateSupabaseToken, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM users WHERE id = $1', [req.user.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Account deletion error:', err);
+    res.status(500).json({ error: 'Failed to delete account' });
+  }
+});
+
 app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
   try {
     const { email_content, sender, subject } = req.body;
