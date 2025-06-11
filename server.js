@@ -62,6 +62,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS email_analyses (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        was_free BOOLEAN DEFAULT FALSE,
         email_hash VARCHAR(64) UNIQUE NOT NULL,
         subject TEXT,
         priority VARCHAR(50),
@@ -151,7 +152,9 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     const exists = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1', [emailHash]);
     if (exists.rows.length) return res.json(exists.rows[0]);
 
-    const prompt = buildClaudePrompt({ sender, subject, emailContent: email_content });
+    const plan = req.user.plan || 'free';
+    const prompt = buildClaudePrompt({ sender, subject, emailContent: email_content, plan });
+
     const completion = await anthropic.messages.create({
       model: 'claude-3-haiku-20240307',
       max_tokens: 1300,
@@ -159,20 +162,18 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
       messages: [{ role: 'user', content: prompt }]
     });
 
-    let parsed = JSON.parse(completion.content[0].text);
+    const fullParsed = JSON.parse(completion.content[0].text);
 
-    const allowed = PLAN_FEATURES[req.user.plan] || PLAN_FEATURES.free;
-      
-    parsed = {
-      ...(allowed.includes('priority') && { priority: parsed.priority }),
-      ...(allowed.includes('intent') && { intent: parsed.intent }),
-      ...(allowed.includes('tasks') && { tasks: parsed.tasks }),
-      ...(allowed.includes('sentiment') && { sentiment: parsed.sentiment }),
-      ...(allowed.includes('tone') && { tone: parsed.tone }),
-      ...(allowed.includes('deadline') && { deadline: parsed.deadline }),
-      ...(allowed.includes('confidence') && { ai_confidence: parsed.confidence })
+    const allowed = PLAN_FEATURES[plan] || PLAN_FEATURES.free;
+    const parsed = {
+      ...(allowed.includes('priority') && { priority: fullParsed.priority }),
+      ...(allowed.includes('intent') && { intent: fullParsed.intent }),
+      ...(allowed.includes('tasks') && { tasks: fullParsed.tasks }),
+      ...(allowed.includes('sentiment') && { sentiment: fullParsed.sentiment }),
+      ...(allowed.includes('tone') && { tone: fullParsed.tone }),
+      ...(allowed.includes('deadline') && { deadline: fullParsed.deadline }),
+      ...(allowed.includes('confidence') && { ai_confidence: fullParsed.confidence })
     };
-    
 
     // Normalize deadline
     parsed.deadline = parsed.deadline === "null" || !parsed.deadline ? null : parsed.deadline;
@@ -180,8 +181,8 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     await pool.query(`
       INSERT INTO email_analyses (
         user_id, email_hash, subject, priority, intent, tone,
-        sentiment, tasks, deadline, ai_confidence
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        sentiment, tasks, deadline, ai_confidence, was_free
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         req.user.id,
         emailHash,
@@ -192,7 +193,8 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
         parsed.sentiment ?? null,
         parsed.tasks ?? null,
         parsed.deadline ?? null,
-        parsed.ai_confidence ?? null
+        parsed.ai_confidence ?? null,
+        plan === 'free'
       ]
     );
 

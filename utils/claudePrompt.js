@@ -1,13 +1,26 @@
-module.exports = function buildClaudePrompt({ sender, subject, emailContent }) {
-  return `You are an expert email assistant. Analyze the email message below and return a structured JSON response with the following fields:
+module.exports = function buildClaudePrompt({ sender, subject, emailContent, plan = 'free' }) {
+  const CATEGORY_PROMPTS = {
+    priority: '1. "priority": What is the urgency? ("High", "Medium", "Low")',
+    intent: '2. "intent": What is the sender’s intention?',
+    tasks: '3. "tasks": Up to 2 requested action items. Each ≤ 100 characters.',
+    sentiment: '4. "sentiment": Is the sentiment positive, neutral, or negative?',
+    tone: '5. "tone": Describe the tone. Choose: "Professional", "Polite", "Casual", "Frustrated", "Excited", "Demanding", or "Neutral".',
+    deadline: '6. "deadline": Deadline in ISO format (e.g., "2025-06-09"), or "null".',
+    confidence: '7. "confidence": From 0 to 100, how confident are you in your ability to extract this information?'
+  };
 
-1. "priority": What is the urgency of the email? Choose: "High", "Medium", or "Low".
-2. "intent": What is the sender’s main intention? (e.g., scheduling, requesting info, following up, etc.)
-3. "tone": Describe the tone. Choose from: "Professional", "Polite", "Casual", "Frustrated", "Excited", "Demanding", or "Neutral".
-4. "sentiment": Is the sentiment positive, neutral, or negative?
-5. "tasks": A list of up to 2 action items the sender is requesting. Each task should be ≤ 100 characters and phrased as a clear instruction.
-6. "deadline": If a deadline is mentioned, extract it in ISO 8601 format (e.g., "2025-06-09"). If no deadline is present, write "null".
-7. "confidence": From 0 to 100, how confident are you in your ability to correctly extract the information from this email? Consider clarity, length, grammar, and structure.
+  const PLAN_FEATURES = {
+    free: ['priority', 'intent'],
+    standard: ['priority', 'intent', 'tasks', 'sentiment'],
+    pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'confidence']
+  };
+
+  const features = PLAN_FEATURES[plan] || PLAN_FEATURES.free;
+  const body = features.map(f => CATEGORY_PROMPTS[f]).join('\n');
+
+  return `You are an expert email assistant. Analyze the email message below and return a structured JSON response with only the following fields:
+
+${body}
 
 Only return a JSON object. Do not explain your reasoning.
 
