@@ -55,6 +55,7 @@ async function initializeDatabase() {
         plan VARCHAR(50) DEFAULT 'free',
         stripe_customer_id VARCHAR(255),
         emails_analyzed_this_month INTEGER DEFAULT 0,
+        total_emails_ever INTEGER DEFAULT 0,
         month_reset_date DATE DEFAULT CURRENT_DATE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -281,7 +282,11 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
       ...(allowed.includes('confidence') && { ai_confidence: fullParsed.confidence })
     };
 
-    await pool.query('UPDATE users SET emails_analyzed_this_month = emails_analyzed_this_month + 1 WHERE id = $1', [req.user.id]);
+    await pool.query(`
+      UPDATE users
+      SET emails_analyzed_this_month = emails_analyzed_this_month + 1,
+          total_emails_ever = total_emails_ever + 1
+      WHERE id = $1`, [req.user.id]);
 
     res.json(parsed);
   } catch (err) {
