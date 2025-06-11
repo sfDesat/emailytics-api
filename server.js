@@ -169,7 +169,7 @@ app.get('/dashboard', authenticateSupabaseToken, async (req, res) => {
     res.json({
       plan: user.plan,
       emails_analyzed_this_month: user.emails_analyzed_this_month,
-      total_emails_ever: parseInt(totalEmails[0].count, 10),
+      total_emails_ever: user.total_emails_ever
       limit: isUnlimited ? null : limit,
       next_reset: user.month_reset_date,
       subscription_status: subscription?.status || (user.plan === 'pro' ? 'manual' : 'none'),
