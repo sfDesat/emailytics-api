@@ -144,8 +144,38 @@ app.get('/auth/profile', authenticateSupabaseToken, (req, res) => {
   res.json({ user: req.user });
 });
 
-app.get('/plan', authenticateSupabaseToken, (req, res) => {
-  res.json({ plan: req.user.plan });
+app.get('/dashboard', authenticateSupabaseToken, async (req, res) => {
+  try {
+    const user = req.user;
+
+    // Get total emails ever analyzed by user
+    const { rows: totalEmails } = await pool.query('SELECT COUNT(*) FROM email_analyses WHERE user_id = $1', [user.id]);
+
+    // Get latest subscription info
+    const { rows: [subscription] } = await pool.query('SELECT * FROM subscriptions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1', [user.id]);
+
+    const limit = PLAN_LIMITS[user.plan] || PLAN_LIMITS.free;
+    const currentUsage = user.emails_analyzed_this_month;
+    const isUnlimited = user.plan === 'pro';
+
+    res.json({
+      plan: user.plan,
+      emails_analyzed_this_month: currentUsage,
+      total_emails_ever: parseInt(totalEmails[0].count, 10),
+      limit: isUnlimited ? null : limit,
+      next_reset: user.month_reset_date,
+      subscription_status: subscription?.status || 'none',
+      current_period_end: subscription?.current_period_end || null,
+      stripe_customer_email: null // placeholder, not implemented
+    });
+  } catch (err) {
+    console.error('❌ Dashboard fetch error:', err);
+    res.status(500).json({ error: 'Failed to load dashboard' });
+  }
+});
+
+app.get('/extension-check', authenticateSupabaseToken, (req, res) => {
+  res.json({ installed: true });
 });
 
 app.delete('/delete-account', authenticateSupabaseToken, async (req, res) => {
