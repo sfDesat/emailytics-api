@@ -13,6 +13,8 @@ const app = express();
 const port = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 
+app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
+
 const PLAN_FEATURES = {
   free: ['priority', 'intent'],
   standard: ['priority', 'intent', 'tasks', 'sentiment'],
@@ -249,7 +251,7 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
   }
 });
 
-app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+app.post('/webhooks/stripe', async (req, res) => {
   const sig = req.headers['stripe-signature'];
   try {
     const event = stripeClient.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
@@ -270,6 +272,30 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (r
         ON CONFLICT (stripe_subscription_id) DO UPDATE SET status = EXCLUDED.status, current_period_start = EXCLUDED.current_period_start, current_period_end = EXCLUDED.current_period_end`,
         [user.id, subscription.id, subscription.status, new Date(subscription.current_period_start * 1000), new Date(subscription.current_period_end * 1000)]
       );
+    }
+
+    // 🔄 Handle subscription deletion
+    if (event.type === 'customer.subscription.deleted') {
+      const subscription = event.data.object;
+      await pool.query('UPDATE users SET plan = $1 WHERE stripe_customer_id = $2', ['free', subscription.customer]);
+      await pool.query('UPDATE subscriptions SET status = $1 WHERE stripe_subscription_id = $2', ['cancelled', subscription.id]);
+    }
+
+    // 🔁 Handle subscription status updates
+    if (event.type === 'customer.subscription.updated') {
+      const subscription = event.data.object;
+      await pool.query('UPDATE subscriptions SET status = $1, current_period_start = $2, current_period_end = $3 WHERE stripe_subscription_id = $4', [
+        subscription.status,
+        new Date(subscription.current_period_start * 1000),
+        new Date(subscription.current_period_end * 1000),
+        subscription.id
+      ]);
+    }
+
+    // 🧹 Handle deleted customers (cleanup user and data)
+    if (event.type === 'customer.deleted') {
+      const customer = event.data.object;
+      await pool.query('DELETE FROM users WHERE stripe_customer_id = $1', [customer.id]);
     }
 
     res.json({ received: true });
