@@ -292,6 +292,14 @@ app.post('/webhooks/stripe', async (req, res) => {
       ]);
     }
 
+    // ❌ Handle payment failure (auto-downgrade)
+    if (event.type === 'invoice.payment_failed') {
+      const invoice = event.data.object;
+      const subscription = await stripeClient.subscriptions.retrieve(invoice.subscription);
+      await pool.query('UPDATE users SET plan = $1 WHERE stripe_customer_id = $2', ['free', subscription.customer]);
+      await pool.query('UPDATE subscriptions SET status = $1 WHERE stripe_subscription_id = $2', ['payment_failed', subscription.id]);
+    }
+
     // 🧹 Handle deleted customers (cleanup user and data)
     if (event.type === 'customer.deleted') {
       const customer = event.data.object;
