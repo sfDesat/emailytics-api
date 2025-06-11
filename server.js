@@ -16,15 +16,15 @@ app.set('trust proxy', 1);
 app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
 
 const PLAN_FEATURES = {
-  free: ['priority', 'intent'],
-  standard: ['priority', 'intent', 'tasks', 'sentiment'],
-  pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'confidence']
+  Free: ['priority', 'intent'],
+  Standard: ['priority', 'intent', 'tasks', 'sentiment'],
+  Pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'confidence']
 };
 
 const PLAN_LIMITS = {
-  free: 50,
-  standard: 600,
-  pro: Infinity
+  Free: 50,
+  Standard: 600,
+  Pro: Infinity
 };
 
 const pool = new Pool({
