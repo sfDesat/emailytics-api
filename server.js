@@ -52,7 +52,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
-        plan VARCHAR(50) DEFAULT 'free',
+        plan VARCHAR(50) DEFAULT 'Free',
         stripe_customer_id VARCHAR(255),
         emails_analyzed_this_month INTEGER DEFAULT 0,
         total_emails_ever INTEGER DEFAULT 0,
@@ -131,7 +131,7 @@ function generateEmailHash(content, sender, subject) {
 }
 
 function enforcePlanLimit(user) {
-  const limit = PLAN_LIMITS[user.plan] || PLAN_LIMITS.free;
+  const limit = PLAN_LIMITS[user.plan] || PLAN_LIMITS.Free;
   if (user.emails_analyzed_this_month >= limit) {
     throw new Error(`Monthly email analysis limit reached for plan: ${user.plan}`);
   }
@@ -148,8 +148,8 @@ app.get('/auth/profile', authenticateSupabaseToken, (req, res) => {
 app.get('/dashboard', authenticateSupabaseToken, async (req, res) => {
   try {
     const user = req.user;
-    const limit = PLAN_LIMITS[user.plan] || PLAN_LIMITS.free;
-    const isUnlimited = user.plan === 'pro';
+    const limit = PLAN_LIMITS[user.plan] || PLAN_LIMITS.Free;
+    const isUnlimited = user.plan === 'Pro';
 
     const { rows: totalEmails } = await pool.query(
       'SELECT COUNT(*) FROM email_analyses WHERE user_id = $1',
@@ -198,12 +198,12 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     enforcePlanLimit(req.user);
 
     const emailHash = generateEmailHash(email_content, sender, subject);
-    const plan = req.user.plan || 'free';
+    const plan = req.user.plan || 'Free';
 
     const existing = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1', [emailHash]);
     const row = existing.rows[0];
 
-    const needsReanalysis = row && row.was_free && plan !== 'free';
+    const needsReanalysis = row && row.was_free && plan !== 'Free';
 
     // ✅ If exists and doesn't need upgrade, return as-is
     if (row && !needsReanalysis) return res.json(row);
@@ -258,13 +258,13 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
           fullParsed.tasks ?? null,
           fullParsed.deadline ?? null,
           fullParsed.confidence ?? null,
-          plan === 'free'
+          plan === 'Free'
         ]
       );
     }
 
     // ✅ Always return only allowed fields
-    const allowed = PLAN_FEATURES[plan] || PLAN_FEATURES.free;
+    const allowed = PLAN_FEATURES[plan] || PLAN_FEATURES.Free;
     const parsed = {
       ...(allowed.includes('priority') && { priority: fullParsed.priority }),
       ...(allowed.includes('intent') && { intent: fullParsed.intent }),
@@ -301,7 +301,7 @@ app.post('/webhooks/stripe', async (req, res) => {
       const user = result.rows[0];
 
       await pool.query('UPDATE users SET plan = $1, stripe_customer_id = $2 WHERE id = $3', [
-        'standard', subscription.customer, user.id
+        'Standard', subscription.customer, user.id
       ]);
 
       await pool.query(`INSERT INTO subscriptions (user_id, stripe_subscription_id, status, current_period_start, current_period_end)
@@ -314,7 +314,7 @@ app.post('/webhooks/stripe', async (req, res) => {
     // 🔄 Handle subscription deletion
     if (event.type === 'customer.subscription.deleted') {
       const subscription = event.data.object;
-      await pool.query('UPDATE users SET plan = $1 WHERE stripe_customer_id = $2', ['free', subscription.customer]);
+      await pool.query('UPDATE users SET plan = $1 WHERE stripe_customer_id = $2', ['Free', subscription.customer]);
       await pool.query('UPDATE subscriptions SET status = $1 WHERE stripe_subscription_id = $2', ['cancelled', subscription.id]);
     }
 
@@ -333,7 +333,7 @@ app.post('/webhooks/stripe', async (req, res) => {
     if (event.type === 'invoice.payment_failed') {
       const invoice = event.data.object;
       const subscription = await stripeClient.subscriptions.retrieve(invoice.subscription);
-      await pool.query('UPDATE users SET plan = $1 WHERE stripe_customer_id = $2', ['free', subscription.customer]);
+      await pool.query('UPDATE users SET plan = $1 WHERE stripe_customer_id = $2', ['Free', subscription.customer]);
       await pool.query('UPDATE subscriptions SET status = $1 WHERE stripe_subscription_id = $2', ['payment_failed', subscription.id]);
     }
 
