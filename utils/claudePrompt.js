@@ -9,14 +9,12 @@ module.exports = function buildClaudePrompt({ sender, subject, emailContent, pla
     confidence: '7. "confidence": From 0 to 100, how confident are you in your ability to extract this information?'
   };
 
-  const PLAN_FEATURES = {
-    free: ['priority', 'intent'],
-    standard: ['priority', 'intent', 'tasks', 'sentiment'],
-    pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'confidence']
-  };
+  // ⛔ Limit categories only for FREE
+  const useKeys = plan === 'free'
+    ? ['priority', 'intent']
+    : ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'confidence'];
 
-  const features = PLAN_FEATURES[plan] || PLAN_FEATURES.free;
-  const body = features.map(f => CATEGORY_PROMPTS[f]).join('\n');
+  const body = useKeys.map(key => CATEGORY_PROMPTS[key]).join('\n');
 
   return `You are an expert email assistant. Analyze the email message below and return a structured JSON response with only the following fields:
 
