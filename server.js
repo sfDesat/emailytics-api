@@ -149,12 +149,17 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     enforcePlanLimit(req.user);
 
     const emailHash = generateEmailHash(email_content, sender, subject);
-    const exists = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1', [emailHash]);
-    if (exists.rows.length) return res.json(exists.rows[0]);
-
     const plan = req.user.plan || 'free';
-    const prompt = buildClaudePrompt({ sender, subject, emailContent: email_content, plan });
 
+    const existing = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1', [emailHash]);
+    const row = existing.rows[0];
+
+    const needsReanalysis = row && row.was_free && plan !== 'free';
+
+    // ✅ If exists and doesn't need upgrade, return as-is
+    if (row && !needsReanalysis) return res.json(row);
+
+    const prompt = buildClaudePrompt({ sender, subject, emailContent: email_content, plan });
     const completion = await anthropic.messages.create({
       model: 'claude-3-haiku-20240307',
       max_tokens: 1300,
@@ -164,6 +169,52 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
 
     const fullParsed = JSON.parse(completion.content[0].text);
 
+    // Normalize deadline
+    fullParsed.deadline = fullParsed.deadline === "null" || !fullParsed.deadline ? null : fullParsed.deadline;
+
+    if (row && needsReanalysis) {
+      // ✅ Reanalyze and update in-place
+      await pool.query(`
+        UPDATE email_analyses SET
+          priority = $1, intent = $2, tone = $3, sentiment = $4,
+          tasks = $5, deadline = $6, ai_confidence = $7,
+          was_free = false
+        WHERE email_hash = $8`,
+        [
+          fullParsed.priority ?? null,
+          fullParsed.intent ?? null,
+          fullParsed.tone ?? null,
+          fullParsed.sentiment ?? null,
+          fullParsed.tasks ?? null,
+          fullParsed.deadline ?? null,
+          fullParsed.confidence ?? null,
+          emailHash
+        ]
+      );
+    } else {
+      // ✅ New analysis insert
+      await pool.query(`
+        INSERT INTO email_analyses (
+          user_id, email_hash, subject, priority, intent, tone,
+          sentiment, tasks, deadline, ai_confidence, was_free
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          req.user.id,
+          emailHash,
+          subject,
+          fullParsed.priority ?? null,
+          fullParsed.intent ?? null,
+          fullParsed.tone ?? null,
+          fullParsed.sentiment ?? null,
+          fullParsed.tasks ?? null,
+          fullParsed.deadline ?? null,
+          fullParsed.confidence ?? null,
+          plan === 'free'
+        ]
+      );
+    }
+
+    // ✅ Always return only allowed fields
     const allowed = PLAN_FEATURES[plan] || PLAN_FEATURES.free;
     const parsed = {
       ...(allowed.includes('priority') && { priority: fullParsed.priority }),
@@ -174,29 +225,6 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
       ...(allowed.includes('deadline') && { deadline: fullParsed.deadline }),
       ...(allowed.includes('confidence') && { ai_confidence: fullParsed.confidence })
     };
-
-    // Normalize deadline
-    parsed.deadline = parsed.deadline === "null" || !parsed.deadline ? null : parsed.deadline;
-
-    await pool.query(`
-      INSERT INTO email_analyses (
-        user_id, email_hash, subject, priority, intent, tone,
-        sentiment, tasks, deadline, ai_confidence, was_free
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-      [
-        req.user.id,
-        emailHash,
-        subject,
-        parsed.priority ?? null,
-        parsed.intent ?? null,
-        parsed.tone ?? null,
-        parsed.sentiment ?? null,
-        parsed.tasks ?? null,
-        parsed.deadline ?? null,
-        parsed.ai_confidence ?? null,
-        plan === 'free'
-      ]
-    );
 
     await pool.query('UPDATE users SET emails_analyzed_this_month = emails_analyzed_this_month + 1 WHERE id = $1', [req.user.id]);
 
