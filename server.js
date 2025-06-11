@@ -162,6 +162,7 @@ app.get('/dashboard', authenticateSupabaseToken, async (req, res) => {
     );
 
     res.json({
+      email: user.email,
       plan: user.plan,
       emailsAnalyzedThisMonth: user.emails_analyzed_this_month,
       totalEmailsAnalyzed: user.total_emails_ever ?? parseInt(totalEmails[0].count, 10),
