@@ -13,6 +13,18 @@ const app = express();
 const port = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 
+const PLAN_FEATURES = {
+  free: ['priority', 'intent'],
+  standard: ['priority', 'intent', 'tasks', 'sentiment'],
+  pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'confidence']
+};
+
+const PLAN_LIMITS = {
+  free: 50,
+  standard: 600,
+  pro: Infinity
+};
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
@@ -31,12 +43,6 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
-
-const PLAN_LIMITS = {
-  free: 50,
-  standard: 600,
-  pro: Infinity
-};
 
 async function initializeDatabase() {
   try {
@@ -153,7 +159,20 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
       messages: [{ role: 'user', content: prompt }]
     });
 
-    const parsed = JSON.parse(completion.content[0].text);
+    let parsed = JSON.parse(completion.content[0].text);
+
+    const allowed = PLAN_FEATURES[req.user.plan] || PLAN_FEATURES.free;
+      
+    parsed = {
+      ...(allowed.includes('priority') && { priority: parsed.priority }),
+      ...(allowed.includes('intent') && { intent: parsed.intent }),
+      ...(allowed.includes('tasks') && { tasks: parsed.tasks }),
+      ...(allowed.includes('sentiment') && { sentiment: parsed.sentiment }),
+      ...(allowed.includes('tone') && { tone: parsed.tone }),
+      ...(allowed.includes('deadline') && { deadline: parsed.deadline }),
+      ...(allowed.includes('confidence') && { ai_confidence: parsed.confidence })
+    };
+    
 
     // Normalize deadline
     parsed.deadline = parsed.deadline === "null" || !parsed.deadline ? null : parsed.deadline;
@@ -163,10 +182,19 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
         user_id, email_hash, subject, priority, intent, tone,
         sentiment, tasks, deadline, ai_confidence
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [req.user.id, emailHash, subject, parsed.priority, parsed.intent, parsed.tone,
-       parsed.sentiment, parsed.tasks, parsed.deadline, parsed.confidence]
+      [
+        req.user.id,
+        emailHash,
+        subject,
+        parsed.priority ?? null,
+        parsed.intent ?? null,
+        parsed.tone ?? null,
+        parsed.sentiment ?? null,
+        parsed.tasks ?? null,
+        parsed.deadline ?? null,
+        parsed.ai_confidence ?? null
+      ]
     );
-
 
     await pool.query('UPDATE users SET emails_analyzed_this_month = emails_analyzed_this_month + 1 WHERE id = $1', [req.user.id]);
 
