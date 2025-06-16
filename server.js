@@ -22,7 +22,7 @@ const PLAN_FEATURES = {
 };
 
 const PLAN_LIMITS = {
-  Free: 50,
+  Free: 100,
   Standard: 600,
   Pro: Infinity
 };
@@ -148,9 +148,10 @@ app.get('/auth/profile', authenticateSupabaseToken, (req, res) => {
 app.get('/dashboard', authenticateSupabaseToken, async (req, res) => {
   try {
     const user = req.user;
-    const limit = PLAN_LIMITS[user.plan] || PLAN_LIMITS.Free;
-    const isUnlimited = user.plan === 'Pro';
-
+    const plan = user.plan || 'Free';
+    const limit = PLAN_LIMITS[plan];
+    const isUnlimited = limit === Infinity;
+      
     const { rows: totalEmails } = await pool.query(
       'SELECT COUNT(*) FROM email_analyses WHERE user_id = $1',
       [user.id]
