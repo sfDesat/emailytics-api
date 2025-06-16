@@ -22,9 +22,9 @@ const PLAN_FEATURES = {
 };
 
 const PLAN_LIMITS = {
-  Free: 100,
-  Standard: 600,
-  Pro: Infinity
+  free: 100,
+  standard: 600,
+  pro: Infinity
 };
 
 const pool = new Pool({
@@ -199,12 +199,12 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     enforcePlanLimit(req.user);
 
     const emailHash = generateEmailHash(email_content, sender, subject);
-    const plan = req.user.plan || 'Free';
+    const plan = (req.user.plan || 'Free').toLowerCase();
 
     const existing = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1', [emailHash]);
     const row = existing.rows[0];
 
-    const needsReanalysis = row && row.plan_at_analysis === 'Free' && plan !== 'Free';
+    const needsReanalysis = row && row.plan_at_analysis?.toLowerCase() === 'free' && plan.toLowerCase() !== 'free';
 
     // ✅ Return cached result with fields filtered to current plan
     if (row && !needsReanalysis) {
