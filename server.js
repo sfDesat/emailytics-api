@@ -16,7 +16,7 @@ app.set('trust proxy', 1);
 app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
 
 const PLAN_FEATURES = {
-  Free: ['priority', 'intent'],
+  Free: ['priority', 'intent', 'deadline'],
   Standard: ['priority', 'intent', 'tasks', 'sentiment'],
   Pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'confidence']
 };
