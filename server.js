@@ -18,7 +18,7 @@ app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
 const PLAN_FEATURES = {
   Free: ['priority', 'intent', 'deadline'],
   Standard: ['priority', 'intent', 'tasks', 'sentiment'],
-  Pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'confidence']
+  Pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'ai_confidence']
 };
 
 const PLAN_LIMITS = {
@@ -216,7 +216,7 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
         ...(allowed.includes('sentiment') && { sentiment: row.sentiment }),
         ...(allowed.includes('tone') && { tone: row.tone }),
         ...(allowed.includes('deadline') && { deadline: row.deadline }),
-        ...(allowed.includes('confidence') && { ai_confidence: row.ai_confidence })
+        ...(allowed.includes('ai_confidence') && { ai_confidence: row.ai_confidence })
       };
       return res.json(parsed);
     }
@@ -281,7 +281,7 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
       ...(allowed.includes('sentiment') && { sentiment: fullParsed.sentiment }),
       ...(allowed.includes('tone') && { tone: fullParsed.tone }),
       ...(allowed.includes('deadline') && { deadline: fullParsed.deadline }),
-      ...(allowed.includes('confidence') && { ai_confidence: fullParsed.confidence })
+      ...(allowed.includes('ai_confidence') && { ai_confidence: fullParsed.confidence })
     };
 
     await pool.query(`
