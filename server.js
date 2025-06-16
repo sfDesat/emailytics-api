@@ -16,9 +16,9 @@ app.set('trust proxy', 1);
 app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
 
 const PLAN_FEATURES = {
-  Free: ['priority', 'intent', 'deadline'],
-  Standard: ['priority', 'intent', 'tasks', 'sentiment'],
-  Pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'ai_confidence']
+  free: ['priority', 'intent', 'deadline'],
+  standard: ['priority', 'intent', 'tasks', 'sentiment'],
+  pro: ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'ai_confidence']
 };
 
 const PLAN_LIMITS = {
@@ -199,7 +199,7 @@ app.post('/analyze', authenticateSupabaseToken, async (req, res) => {
     enforcePlanLimit(req.user);
 
     const emailHash = generateEmailHash(email_content, sender, subject);
-    const plan = (req.user.plan || 'Free').toLowerCase();
+    const plan = (req.user.plan || 'free').toLowerCase();
 
     const existing = await pool.query('SELECT * FROM email_analyses WHERE email_hash = $1', [emailHash]);
     const row = existing.rows[0];
