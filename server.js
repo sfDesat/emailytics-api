@@ -65,7 +65,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS email_analyses (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        was_free BOOLEAN DEFAULT FALSE,
+        plan_at_analysis VARCHAR(50);
         email_hash VARCHAR(64) UNIQUE NOT NULL,
         subject TEXT,
         priority VARCHAR(50),
