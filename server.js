@@ -18,7 +18,7 @@ app.set('trust proxy', 1);
 const PLAN_FEATURES = {
   free:     ['priority','intent', 'deadline'],
   standard: ['priority','intent','tasks','sentiment'],
-  pro:      ['priority','intent','tasks','sentiment','tone','deadline','confidence']
+  pro:      ['priority','intent','tasks','sentiment','tone','deadline','ai_confidence']
 };
 const PLAN_LIMITS = { free: 100, standard: 600, pro: Infinity };
 
