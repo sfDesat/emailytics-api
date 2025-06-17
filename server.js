@@ -170,7 +170,8 @@ app.get('/dashboard', authenticateSupabaseToken, async (req, res) => {
       monthlyLimit: isUnlimited ? null : limit,
       nextResetDate: user.month_reset_date ? new Date(user.month_reset_date).toISOString().split('T')[0] : null,
       subscriptionStatus: subscription?.status || 'none',
-      currentPeriodEnd: subscription?.current_period_end || null
+      currentPeriodEnd: subscription?.current_period_end || null,
+      features: PLAN_FEATURES[plan.toLowerCase()] || []  // ✅ added line
     });
   } catch (err) {
     console.error('❌ Dashboard fetch error:', err);
