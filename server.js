@@ -4,7 +4,6 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const rateLimit = require('express-rate-limit');
-const cron = require('node-cron');
 const { Anthropic } = require('@anthropic-ai/sdk');
 const stripe = require('stripe');
 const { createClient } = require('@supabase/supabase-js');
