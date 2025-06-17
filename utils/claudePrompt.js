@@ -1,28 +1,50 @@
-module.exports = function buildClaudePrompt({ sender, subject, emailContent, plan = 'free' }) {
-  const CATEGORY_PROMPTS = {
-    priority: '1. "priority": What is the urgency? ("High", "Medium", "Low")',
-    intent: '2. "intent": What is the sender’s intention?',
-    tasks: '3. "tasks": Up to 2 requested action items. Each ≤ 100 characters.',
-    sentiment: '4. "sentiment": Is the sentiment positive, neutral, or negative?',
-    tone: '5. "tone": Describe the tone. Choose: "Professional", "Polite", "Casual", "Frustrated", "Excited", "Demanding", or "Neutral".',
-    deadline: '6. "deadline": Deadline in ISO format (e.g., "2025-06-09"), or "null".',
-    confidence: '7. "confidence": From 0 to 100, how confident are you in your ability to extract this information?'
-  };
+/**
+ * buildClaudePrompt.js
+ *
+ * Dynamically constructs a JSON‐schema prompt
+ * based on the exact fields your plan supports.
+ */
 
-  // ⛔ Limit categories only for FREE
-  const useKeys = plan === 'free'
-    ? ['priority', 'intent']
-    : ['priority', 'intent', 'tasks', 'sentiment', 'tone', 'deadline', 'confidence'];
+module.exports = function buildClaudePrompt({
+  sender,
+  subject,
+  emailContent,
+  fields = []    // passed in from server.js = PLAN_FEATURES[plan]
+}) {
+  // Build a minimal JSON schema description
+  const schemaLines = [
+    '{',
+    ...fields.map((f, i) => {
+      // quote keys, comma‐separate
+      const comma = i < fields.length - 1 ? ',' : '';
+      switch (f) {
+        case 'priority':
+          return `  "priority": "High|Medium|Low"${comma}`;
+        case 'intent':
+          return `  "intent": "string"${comma}`;
+        case 'tasks':
+          return `  "tasks": ["string", ...] (max 2 items)${comma}`;
+        case 'sentiment':
+          return `  "sentiment": "positive|neutral|negative"${comma}`;
+        case 'tone':
+          return `  "tone": "Professional|Polite|Casual|Frustrated|Excited|Demanding|Neutral"${comma}`;
+        case 'deadline':
+          return `  "deadline": "YYYY-MM-DD" or null${comma}`;
+        case 'confidence':
+          return `  "confidence": integer 0–100${comma}`;
+        default:
+          return `  "${f}": "string"${comma}`;
+      }
+    }),
+    '}'
+  ].join('\n');
 
-  const body = useKeys.map(key => CATEGORY_PROMPTS[key]).join('\n');
+  return `You are an expert email assistant that analyzes emails and extract key information.
+  
+Return exactly a JSON object matching this schema:
+${schemaLines}
 
-  return `You are an expert email assistant. Analyze the email message below and return a structured JSON response with only the following fields:
-
-${body}
-
-Only return a JSON object. Do not explain your reasoning.
-
-Email Details:
+Email:
 Sender: ${sender || 'Unknown'}
 Subject: ${subject || 'No subject'}
 Content: ${emailContent}`;
