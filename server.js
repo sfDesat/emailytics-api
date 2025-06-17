@@ -105,22 +105,6 @@ async function initializeDatabase() {
   }
 }
 
-// ─── Cron Job: Reset Monthly Counts ───────────────────────
-// Runs at 00:00 on the 1st of every month
-cron.schedule('0 0 1 * *', async () => {
-  try {
-    await pool.query(`
-      UPDATE users
-      SET emails_analyzed_this_month = 0,
-          month_reset_date = CURRENT_DATE
-      WHERE month_reset_date < date_trunc('month', CURRENT_DATE)
-    `);
-    console.log('🔄 Monthly email counts reset');
-  } catch (err) {
-    console.error('❌ Cron reset error:', err);
-  }
-});
-
 // ─── Auth Middleware ──────────────────────────────────────
 const authenticateSupabaseToken = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
