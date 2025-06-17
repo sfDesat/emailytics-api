@@ -166,14 +166,19 @@ app.get('/dashboard', authenticateSupabaseToken, async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Dashboard error:', err);
-    res.status(500).json({ error: 'Failed to load dashboard' });
+    res.status(500).json({ error:'Internal server error' });
   }
 });
 
 // Analyze
 app.post('/analyze', authenticateSupabaseToken, async (req,res)=>{
   try{
-    const { email_content, sender, subject } = req.body;
+    const { email_content = '', sender = '', subject = '' } = req.body;
+    if (typeof email_content !== 'string' ||
+        email_content.length > 10_000) {          // ~10 KB ≈ 2.5-3k words
+      return res.status(413).json({ error:'Email too large' });
+    }
+
     const plan = (req.user.plan||'free').toLowerCase();
 
     /* monthly limit */
@@ -250,7 +255,7 @@ app.post('/analyze', authenticateSupabaseToken, async (req,res)=>{
   }
   catch(err){
     console.error('❌ Analyze error',err);
-    res.status(500).json({ error:'Failed to analyze email' });
+    res.status(500).json({ error:'Internal server error' });
   }
 });
 
