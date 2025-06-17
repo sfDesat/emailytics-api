@@ -121,7 +121,17 @@ async function initializeDatabase() {
 
     // Indexes
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_analyses_hash ON email_analyses(email_hash)`);
+    /* main upsert target */
+    await pool.query(`
+      ALTER TABLE email_analyses
+      ADD CONSTRAINT email_analyses_hash_user_uidx
+      UNIQUE (email_hash, user_id)
+    `);
+    /* secondary lookup index just on hash (cache hits) */
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_analyses_hash
+      ON email_analyses(email_hash)
+    `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_id ON subscriptions(stripe_subscription_id)`);
 
     console.log('✅ Database & indexes initialized');
