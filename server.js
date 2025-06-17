@@ -1,23 +1,26 @@
-// server.js – Supabase Integrated Email Analysis Backend with Plan Limits, Cron Reset, Upserts & Indexes
+// server.js – Secure Emailytics backend (MVP)
 
 
 /* ────────── 0. IMPORTS & INIT ────────── */
-const express     = require('express');
-const cors        = require('cors');
-const { Pool }    = require('pg');
-const rateLimit   = require('express-rate-limit');
-const { Anthropic }   = require('@anthropic-ai/sdk');
-const stripe      = require('stripe');
+const express  = require('express');
+const cors     = require('cors');
+const helmet   = require('helmet');
+const { Pool } = require('pg');
+const rateLimitIP = require('express-rate-limit');
+const { RateLimiterMemory } = require('rate-limiter-flexible');
+const { z }    = require('zod');
+const stripe   = require('stripe');
+const { Anthropic } = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
 const buildClaudePrompt = require('./utils/claudePrompt');
-const helmet      = require('helmet');
 require('dotenv').config();
 
-const app = express();
+const app  = express();
 const port = process.env.PORT || 3000;
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
-/* ────────── 1. CONSTANTS ────────── */
+/* ────────── 1. PLAN CONSTANTS ────────── */
 const PLAN_FEATURES = {
   free:     ['priority','intent','deadline'],
   standard: ['priority','intent','tasks','sentiment'],
@@ -28,29 +31,50 @@ const PLAN_LIMITS = { free: 100, standard: 600, pro: Infinity };
 /* ────────── 2. DATABASE ────────── */
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production'
-        ? { rejectUnauthorized: false }
-        : false,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized:false } : false,
   max: 10
 });
 
 /* ────────── 3. 3RD-PARTY CLIENTS ────────── */
-const supabase      = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-const stripeClient  = stripe(process.env.STRIPE_SECRET_KEY);
-const stripeSecret  = process.env.STRIPE_WEBHOOK_SECRET;          // ← for signature check
-const anthropic     = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+const supabase     = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+const stripeClient = stripe(process.env.STRIPE_SECRET_KEY);
+const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET;
+const anthropic    = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 /* ────────── 4. MIDDLEWARE ────────── */
-app.use('/webhooks/stripe', express.raw({ type: 'application/json' })); // raw body for Stripe
-app.use(helmet()); // Security headers
-app.use(cors({
-  origin: ['https://mail.google.com', process.env.FRONTEND_URL],
-  credentials: true
-}));
-app.use(express.json({ limit: '10mb' }));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
+// Stripe wants the raw body
+app.use('/webhooks/stripe', express.raw({ type:'application/json' }));
 
-// ─── Initialize Tables & Indexes ─────────────────────────
+app.use(helmet({
+  crossOriginResourcePolicy:{ policy:'same-site' },
+  referrerPolicy:{ policy:'no-referrer' }
+}));
+
+app.use(cors({
+  origin:['https://mail.google.com', process.env.FRONTEND_URL],
+  credentials:true
+}));
+
+// Generic IP limiter
+app.use(rateLimitIP({ windowMs:15*60*1000, max:100 }));
+
+app.use(express.json({ limit:'10mb' }));
+
+/* ────────── 5. PER-USER RATE-LIMIT ────────── */
+const limiterPerUser = new RateLimiterMemory({ points:30, duration:60 });
+const limitUser = (req,res,next)=>
+  limiterPerUser.consume(String(req.user.id))
+  .then(()=>next())
+  .catch(()=>res.status(429).json({ error:'Too many requests' }));
+
+/* ────────── 6. ZOD SCHEMA ────────── */
+const analyzeSchema = z.object({
+  email_content : z.string().min(10).max(10_000),
+  sender        : z.string().max(320),
+  subject       : z.string().max(500)
+});
+
+// ─── 7. Initialize Tables & Indexes ─────────────────────────
 async function initializeDatabase() {
   try {
     // Users
@@ -106,183 +130,167 @@ async function initializeDatabase() {
   }
 }
 
-// ─── Auth Middleware ──────────────────────────────────────
-const authenticateSupabaseToken = async (req, res, next) => {
+/* ────────── 8. AUTH MIDDLEWARE ────────── */
+const authenticate = async (req,res,next)=>{
   const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token required' });
+  if(!token) return res.status(401).json({ error:'Token required' });
+  try{
+    const { data:{user}, error } = await supabase.auth.getUser(token);
+    if(error || !user) throw error||new Error('Invalid user');
 
-  try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) throw error || new Error('Invalid user');
-
-    let result = await pool.query('SELECT * FROM users WHERE email = $1', [user.email]);
-    let row = result.rows[0];
-    if (!row) {
-      const insert = await pool.query(
-        'INSERT INTO users (email) VALUES ($1) RETURNING *',
-        [user.email]
-      );
-      row = insert.rows[0];
-    }
+    const { rows:[row] } = await pool.query(
+      'INSERT INTO users (email) VALUES ($1) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING *',
+      [user.email]
+    );
     req.user = row;
     next();
-  } catch (err) {
-    console.error('❌ Auth error:', err);
-    res.status(403).json({ error: 'Invalid or expired token' });
+  }catch(err){
+    console.error('Auth error:',err);
+    res.status(403).json({ error:'Invalid or expired token' });
   }
 };
 
-// ─── Routes ───────────────────────────────────────────────
-// Healthcheck
-app.get('/',              (_,res)=>res.json({status:'ok',ts:new Date().toISOString()}));
+/* ────────── 8. ROUTES ────────── */
+/* health */
+app.get('/',(_,res)=>res.json({ status:'ok', ts:new Date().toISOString() }));
 
-// Profile
-app.get('/auth/profile',  authenticateSupabaseToken, (req,res)=>res.json({user:req.user}));
-
-// Dashboard
-app.get('/dashboard', authenticateSupabaseToken, async (req, res) => {
-  try {
-    const user = req.user;
-    const plan = user.plan?.toLowerCase() || 'free';
-    const limit = PLAN_LIMITS[plan];
-    const isUnlimited = limit === Infinity;
-
-    // Use tracked total_emails_ever
-    res.json({
-      email: user.email,
-      plan: user.plan,
-      emailsAnalyzedThisMonth: user.emails_analyzed_this_month,
-      totalEmailsAnalyzed: user.total_emails_ever,
-      monthlyLimit: isUnlimited ? null : limit,
-      nextResetDate: user.month_reset_date?.toISOString().split('T')[0] || null,
-      subscriptionStatus: await (async () => {
-        const { rows } = await pool.query(
-          'SELECT status FROM subscriptions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
-          [user.id]
-        );
-        return rows[0]?.status || 'none';
-      })(),
-      features: PLAN_FEATURES[plan] || []
-    });
-  } catch (err) {
-    console.error('❌ Dashboard error:', err);
-    res.status(500).json({ error:'Internal server error' });
-  }
+app.get('/auth/profile', authenticate, (req, res) => {
+  // ⚠️  only return what you actually need on the client
+  res.json({
+    id        : req.user.id,
+    email     : req.user.email,
+    plan      : req.user.plan,
+    features  : PLAN_FEATURES[(req.user.plan||'free').toLowerCase()] || []
+  });
 });
 
-// Analyze
-app.post('/analyze', authenticateSupabaseToken, async (req,res)=>{
+/* dashboard */
+app.get('/dashboard', authenticate, async (req,res,next)=>{
   try{
-    const { email_content = '', sender = '', subject = '' } = req.body;
-    if (typeof email_content !== 'string' ||
-        email_content.length > 10_000) {          // ~10 KB ≈ 2.5-3k words
-      return res.status(413).json({ error:'Email too large' });
-    }
-
-    const plan = (req.user.plan||'free').toLowerCase();
-
-    /* monthly limit */
-    if (req.user.emails_analyzed_this_month >= PLAN_LIMITS[plan])
-      return res.status(403).json({ error:'Monthly email analysis limit reached' });
-
-    /* deterministic hash of email */
-    const emailHash = require('crypto')
-      .createHash('sha256')
-      .update(email_content+sender+subject)
-      .digest('hex');
-
-    /* ❸  User-scoped cache lookup  */
-    const { rows:[existing] } = await pool.query(
-      `SELECT * FROM email_analyses
-         WHERE email_hash=$1 AND user_id=$2`,           // ← user_id filter
-      [emailHash, req.user.id]
-    );
-
-    const needsReanalysis = existing
-      && existing.plan_at_analysis==='free'
-      && plan!=='free';
-
-    if (existing && !needsReanalysis){
-      const allowed = PLAN_FEATURES[plan];
-      return res.json(allowed.reduce((o,k)=>(o[k]=existing[k],o),{}));
-    }
-
-    /* call Claude */
-    const prompt = buildClaudePrompt({
-      sender, subject, emailContent: email_content, fields: PLAN_FEATURES[plan]
+    const u=req.user, plan=(u.plan||'free').toLowerCase(), limit=PLAN_LIMITS[plan];
+    const { rows:[sub] } = await pool.query(
+      'SELECT status FROM subscriptions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1',[u.id]);
+    res.json({
+      email:u.email,
+      plan:u.plan,
+      emailsAnalyzedThisMonth:u.emails_analyzed_this_month,
+      totalEmailsAnalyzed:u.total_emails_ever,
+      monthlyLimit: limit===Infinity?null:limit,
+      nextResetDate:u.month_reset_date?.toISOString().split('T')[0]||null,
+      subscriptionStatus:sub?.status||'none',
+      features:PLAN_FEATURES[plan]
     });
-    const { content:[{text}] } = await anthropic.messages.create({
-      model:'claude-3-haiku-20240307', max_tokens:1300, temperature:0.5,
-      messages:[{role:'user',content:prompt}]
-    });
-    const parsed = JSON.parse(text);
-    if (['null','','null'].includes(parsed.deadline)) parsed.deadline = null;
-
-    /* upsert */
-    const { rows:[row] } = await pool.query(`
-      INSERT INTO email_analyses (
-        user_id,email_hash,subject,priority,intent,tone,sentiment,
-        tasks,deadline,ai_confidence,plan_at_analysis
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-      ON CONFLICT (email_hash,user_id) DO UPDATE           -- primary key now (hash,user)
-        SET priority        = EXCLUDED.priority,
-            intent          = EXCLUDED.intent,
-            tone            = EXCLUDED.tone,
-            sentiment       = EXCLUDED.sentiment,
-            tasks           = EXCLUDED.tasks,
-            deadline        = EXCLUDED.deadline,
-            ai_confidence   = EXCLUDED.ai_confidence,
-            plan_at_analysis= EXCLUDED.plan_at_analysis
-      RETURNING *`,
-      [
-        req.user.id,emailHash,subject,
-        parsed.priority||null,parsed.intent||null,parsed.tone||null,
-        parsed.sentiment||null,parsed.tasks||null,parsed.deadline||null,
-        parsed.confidence||null,plan
-      ]
-    );
-
-    /* counters */
-    await pool.query(`
-      UPDATE users
-         SET emails_analyzed_this_month = emails_analyzed_this_month + 1,
-             total_emails_ever         = total_emails_ever + 1
-       WHERE id=$1`, [req.user.id]);
-
-    /* filter fields */
-    const allowed = PLAN_FEATURES[plan];
-    res.json(allowed.reduce((o,k)=>(o[k]=row[k==='confidence'?'ai_confidence':k],o),{}));
-  }
-  catch(err){
-    console.error('❌ Analyze error',err);
-    res.status(500).json({ error:'Internal server error' });
-  }
+  }catch(e){ next(e); }
 });
 
-/* -------- Stripe webhook: signature-verified -------- */
-app.post('/webhooks/stripe', (req,res)=>{
-  const sig = req.headers['stripe-signature'];
+/* analyze */
+app.post('/analyze',
+  authenticate,
+  limitUser,
+  (req,res,next)=>{                 // Zod validation
+    const parsed = analyzeSchema.safeParse(req.body);
+    if(!parsed.success) return res.status(400).json({ error:'Bad payload' });
+    req.body = parsed.data;
+    next();
+  },
+  async (req,res,next)=>{
+    try{
+      const { email_content, sender, subject } = req.body;
+      const plan=(req.user.plan||'free').toLowerCase();
+
+      if(req.user.emails_analyzed_this_month >= PLAN_LIMITS[plan])
+        return res.status(403).json({ error:'Monthly limit reached' });
+
+      const hash = require('crypto').createHash('sha256')
+                   .update(email_content+sender+subject).digest('hex');
+
+      const { rows:[cached] } = await pool.query(
+        'SELECT * FROM email_analyses WHERE email_hash=$1 AND user_id=$2',
+        [hash, req.user.id]);
+
+      const needsReanalyse = cached && cached.plan_at_analysis==='free' && plan!=='free';
+
+      if(cached && !needsReanalyse){
+        const allowed = PLAN_FEATURES[plan];
+        return res.json(allowed.reduce((o,k)=>(o[k]=cached[k],o),{}));
+      }
+
+      /* LLM call */
+      const prompt = buildClaudePrompt({
+        sender, subject, emailContent: email_content, fields: PLAN_FEATURES[plan]
+      });
+      const { content:[{ text }] } = await anthropic.messages.create({
+        model:'claude-3-haiku-20240307',
+        max_tokens:1300, temperature:0.5,
+        messages:[{ role:'user', content:prompt }]
+      });
+      const parsed = JSON.parse(text);
+      if(['null','',null].includes(parsed.deadline)) parsed.deadline = null;
+
+      /* upsert */
+      const { rows:[row] } = await pool.query(`
+        INSERT INTO email_analyses (
+          user_id,email_hash,subject,priority,intent,tone,sentiment,
+          tasks,deadline,ai_confidence,plan_at_analysis
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ON CONFLICT (email_hash,user_id) DO UPDATE
+          SET priority=EXCLUDED.priority,intent=EXCLUDED.intent,
+              tone=EXCLUDED.tone,sentiment=EXCLUDED.sentiment,
+              tasks=EXCLUDED.tasks,deadline=EXCLUDED.deadline,
+              ai_confidence=EXCLUDED.ai_confidence,plan_at_analysis=EXCLUDED.plan_at_analysis
+        RETURNING *`,
+        [
+          req.user.id, hash, subject,
+          parsed.priority||null, parsed.intent||null, parsed.tone||null,
+          parsed.sentiment||null, parsed.tasks||null, parsed.deadline||null,
+          parsed.confidence||null, plan
+        ]);
+
+      await pool.query(`
+        UPDATE users
+           SET emails_analyzed_this_month = emails_analyzed_this_month + 1,
+               total_emails_ever         = total_emails_ever + 1
+         WHERE id=$1`, [req.user.id]);
+
+      const allowed = PLAN_FEATURES[plan];
+      res.json(allowed.reduce((o,k)=>(o[k]=row[k==='confidence'?'ai_confidence':k],o),{}));
+    }catch(e){ next(e); }
+});
+
+/* ---- STRIPE WEBHOOK (POST only) ---- */
+app.all('/webhooks/stripe',(req,res,next)=>{
+  if(req.method!=='POST') return res.status(405).end();
+  next();
+});
+app.post('/webhooks/stripe',(req,res)=>{
+  const sig=req.headers['stripe-signature'];
   let event;
   try{
     event = stripeClient.webhooks.constructEvent(req.body, sig, stripeSecret);
   }catch(err){
-    console.error('❌ Bad Stripe signature', err.message);
+    console.error('Bad Stripe sig',err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
-
   switch(event.type){
     case 'invoice.payment_succeeded':
-      // TODO: mark subscription paid
+      // TODO
       break;
     case 'customer.subscription.deleted':
-      // TODO: downgrade user’s plan
+      // TODO
       break;
     default:
-      console.log('ℹ️ Unhandled event', event.type);
+      console.log('Unhandled Stripe event →',event.type);
   }
-  res.json({received:true});
+  res.json({ received:true });
 });
 
-initializeDatabase().then(() => {
-  app.listen(port, () => console.log(`🚀 Server ready on port ${port}`));
+/* ────────── 9. ERROR HANDLER ────────── */
+app.use((err,req,res,_next)=>{
+  console.error('Unhandled error →',err);
+  res.status(500).json({ error:'Internal server error' });
+});
+
+/* ────────── 10. BOOTSTRAP ────────── */
+initializeDatabase().then(()=>{
+  app.listen(port,()=>console.log(`🚀 Server ready on ${port}`)); 
 });
