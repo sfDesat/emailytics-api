@@ -246,7 +246,7 @@ app.post('/analyze',
           parsed.sentiment||null,
           parsed.tasks||null,
           parsed.deadline||null,
-          parsed.ai_confidence||null,
+          Number(parsed.ai_confidence)||null,
           plan
         ]);
 
