@@ -131,23 +131,31 @@ async function initializeDatabase() {
 }
 
 /* ────────── 8. AUTH MIDDLEWARE ────────── */
-const authenticate = async (req,res,next)=>{
+const authenticate = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
-  if(!token) return res.status(401).json({ error:'Token required' });
-  try{
-    const { data:{user}, error } = await supabase.auth.getUser(token);
-    if(error || !user) throw error||new Error('invalid user');
+  if (!token) return res.status(401).json({ error: 'Token required' });
 
-    const { rows:[row] } = await pool.query(
-      `INSERT INTO users (email) VALUES ($1)
-       ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
-       RETURNING *`, [user.email]);
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) throw error || new Error('invalid user');
 
-    req.user = row;
+    /* our own Postgres users table (numeric id) */
+    const { rows: [row] } = await pool.query(
+      `INSERT INTO users (email)
+         VALUES ($1)
+      ON CONFLICT (email)
+      DO UPDATE SET email = EXCLUDED.email
+      RETURNING *`,
+      [user.email]
+    );
+
+    req.user     = row;      // internal row (numeric id)
+    req.authUuid = user.id;  // **Supabase Auth UUID** – needed for delete
+
     next();
-  }catch(e){
-    console.error('Auth error:',e);
-    res.status(403).json({ error:'Invalid or expired token' });
+  } catch (e) {
+    console.error('Auth error:', e);
+    res.status(403).json({ error: 'Invalid or expired token' });
   }
 };
 
@@ -205,16 +213,13 @@ app.get('/gdpr/data', authenticate, async (req, res, next) => {
 
 app.delete('/gdpr/data', authenticate, async (req, res, next) => {
   try {
-    await pool.query('DELETE FROM email_analyses WHERE user_id = $1', [
-      req.user.id,
-    ]);
-    await pool.query('DELETE FROM subscriptions WHERE user_id = $1', [
-      req.user.id,
-    ]);
-    await pool.query('DELETE FROM users WHERE id = $1', [req.user.id]);
+    /* wipe Postgres data */
+    await pool.query('DELETE FROM email_analyses WHERE user_id = $1', [req.user.id]);
+    await pool.query('DELETE FROM subscriptions  WHERE user_id = $1', [req.user.id]);
+    await pool.query('DELETE FROM users         WHERE id      = $1', [req.user.id]);
 
-    // If you also want to wipe the Supabase auth-row, uncomment ↓
-    await supabase.auth.admin.deleteUser(req.user.id.toString());
+    /* wipe Supabase Auth record – MUST use the UUID */
+    await supabase.auth.admin.deleteUser(req.authUuid);
 
     res.json({ deleted: true });
   } catch (e) {
