@@ -31,7 +31,7 @@ module.exports = function buildClaudePrompt({
         case 'deadline':
           return `  "deadline": "YYYY-MM-DD" or null${comma}`;
         case 'confidence':
-          return `  "ai_confidence": number between 0 and 100 (no quotes)${comma}`;
+          return `  "ai_confidence": 0–100 (integer, no quotes, e.g., 87)${comma}`;
         default:
           return `  "${f}": "string"${comma}`;
       }
