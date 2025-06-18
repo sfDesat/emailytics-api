@@ -173,6 +173,55 @@ app.get('/auth/profile', authenticate, (req,res)=>{
   });
 });
 
+app.get('/gdpr/data', authenticate, async (req, res, next) => {
+  try {
+    const { rows: analyses } = await pool.query(
+      `SELECT priority,intent,tone,sentiment,tasks,deadline,
+              ai_confidence,processed_at
+         FROM email_analyses
+        WHERE user_id = $1
+        ORDER BY processed_at DESC`,
+      [req.user.id]
+    );
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="emailytics-data.json"'
+    );
+    res.json({
+      user: {
+        id: req.user.id,
+        email: req.user.email,
+        plan: req.user.plan,
+        created_at: req.user.created_at,
+      },
+      analyses,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+app.delete('/gdpr/data', authenticate, async (req, res, next) => {
+  try {
+    await pool.query('DELETE FROM email_analyses WHERE user_id = $1', [
+      req.user.id,
+    ]);
+    await pool.query('DELETE FROM subscriptions WHERE user_id = $1', [
+      req.user.id,
+    ]);
+    await pool.query('DELETE FROM users WHERE id = $1', [req.user.id]);
+
+    // If you also want to wipe the Supabase auth-row, uncomment ↓
+    await supabase.auth.admin.deleteUser(req.user.id.toString());
+
+    res.json({ deleted: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
 app.get('/dashboard', authenticate, async (req,res,next)=>{
   try{
     const u=req.user, plan=(u.plan||'free').toLowerCase(), limit=PLAN_LIMITS[plan];
