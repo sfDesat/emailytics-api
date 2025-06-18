@@ -6,8 +6,8 @@ const express  = require('express');
 const cors     = require('cors');
 const helmet   = require('helmet');
 const { Pool } = require('pg');
-const rateLimitIP = require('express-rate-limit');
-const { RateLimiterMemory } = require('rate-limiter-flexible');
+const rateLimitIP          = require('express-rate-limit');
+const { RateLimiterMemory} = require('rate-limiter-flexible');
 const { z }    = require('zod');
 const stripe   = require('stripe');
 const { Anthropic } = require('@anthropic-ai/sdk');
@@ -42,22 +42,16 @@ const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET;
 const anthropic    = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 /* ────────── 4. MIDDLEWARE ────────── */
-// Stripe wants the raw body
 app.use('/webhooks/stripe', express.raw({ type:'application/json' }));
-
 app.use(helmet({
   crossOriginResourcePolicy:{ policy:'same-site' },
   referrerPolicy:{ policy:'no-referrer' }
 }));
-
 app.use(cors({
   origin:['https://mail.google.com', process.env.FRONTEND_URL],
   credentials:true
 }));
-
-// Generic IP limiter
 app.use(rateLimitIP({ windowMs:15*60*1000, max:100 }));
-
 app.use(express.json({ limit:'10mb' }));
 
 /* ────────── 5. PER-USER RATE-LIMIT ────────── */
@@ -77,12 +71,12 @@ const analyzeSchema = z.object({
 // ─── 7. Initialize Tables & Indexes ─────────────────────────
 async function initializeDatabase() {
   try {
-    // Users
+    /* USERS */
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
-        plan VARCHAR(50) DEFAULT 'Free',
+        plan  VARCHAR(50)  DEFAULT 'Free',
         stripe_customer_id VARCHAR(255),
         emails_analyzed_this_month INTEGER DEFAULT 0,
         total_emails_ever INTEGER DEFAULT 0,
@@ -90,14 +84,14 @@ async function initializeDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`);
-    // Email Analyses
+
+    /* EMAIL_ANALYSES – no subject column */
     await pool.query(`
       CREATE TABLE IF NOT EXISTS email_analyses (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
         plan_at_analysis VARCHAR(50),
-        email_hash VARCHAR(64) UNIQUE NOT NULL,
-        subject TEXT,
+        email_hash VARCHAR(64) NOT NULL,
         priority VARCHAR(50),
         intent TEXT,
         tone VARCHAR(50),
@@ -105,9 +99,14 @@ async function initializeDatabase() {
         tasks TEXT[],
         deadline DATE,
         ai_confidence INTEGER,
-        processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(email_hash,user_id)
       )`);
-    // Subscriptions
+
+    /* ★ Clean-up deployments that still have "subject" */
+    await pool.query(`ALTER TABLE email_analyses DROP COLUMN IF EXISTS subject`);
+
+    /* SUBSCRIPTIONS */
     await pool.query(`
       CREATE TABLE IF NOT EXISTS subscriptions (
         id SERIAL PRIMARY KEY,
@@ -115,23 +114,13 @@ async function initializeDatabase() {
         stripe_subscription_id VARCHAR(255) UNIQUE NOT NULL,
         status VARCHAR(50) NOT NULL,
         current_period_start TIMESTAMP,
-        current_period_end TIMESTAMP,
+        current_period_end   TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`);
 
-    // Indexes
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
-    /* main upsert target */
-    await pool.query(`
-      ALTER TABLE email_analyses
-      ADD CONSTRAINT email_analyses_hash_user_uidx
-      UNIQUE (email_hash, user_id)
-    `);
-    /* secondary lookup index just on hash (cache hits) */
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_email_analyses_hash
-      ON email_analyses(email_hash)
-    `);
+    /* Secondary indexes */
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_email             ON users(email)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_analyses_hash     ON email_analyses(email_hash)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_id ON subscriptions(stripe_subscription_id)`);
 
     console.log('✅ Database & indexes initialized');
@@ -146,35 +135,33 @@ const authenticate = async (req,res,next)=>{
   if(!token) return res.status(401).json({ error:'Token required' });
   try{
     const { data:{user}, error } = await supabase.auth.getUser(token);
-    if(error || !user) throw error||new Error('Invalid user');
+    if(error || !user) throw error||new Error('invalid user');
 
     const { rows:[row] } = await pool.query(
-      'INSERT INTO users (email) VALUES ($1) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING *',
-      [user.email]
-    );
+      `INSERT INTO users (email) VALUES ($1)
+       ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+       RETURNING *`, [user.email]);
+
     req.user = row;
     next();
-  }catch(err){
-    console.error('Auth error:',err);
+  }catch(e){
+    console.error('Auth error:',e);
     res.status(403).json({ error:'Invalid or expired token' });
   }
 };
 
 /* ────────── 8. ROUTES ────────── */
-/* health */
 app.get('/',(_,res)=>res.json({ status:'ok', ts:new Date().toISOString() }));
 
-app.get('/auth/profile', authenticate, (req, res) => {
-  // ⚠️  only return what you actually need on the client
+app.get('/auth/profile', authenticate, (req,res)=>{
   res.json({
-    id        : req.user.id,
-    email     : req.user.email,
-    plan      : req.user.plan,
-    features  : PLAN_FEATURES[(req.user.plan||'free').toLowerCase()] || []
+    id:req.user.id,
+    email:req.user.email,
+    plan:req.user.plan,
+    features:PLAN_FEATURES[(req.user.plan||'free').toLowerCase()]||[]
   });
 });
 
-/* dashboard */
 app.get('/dashboard', authenticate, async (req,res,next)=>{
   try{
     const u=req.user, plan=(u.plan||'free').toLowerCase(), limit=PLAN_LIMITS[plan];
@@ -193,24 +180,23 @@ app.get('/dashboard', authenticate, async (req,res,next)=>{
   }catch(e){ next(e); }
 });
 
-/* analyze */
 app.post('/analyze',
   authenticate,
   limitUser,
-  (req,res,next)=>{                 // Zod validation
+  (req,res,next)=>{
     const parsed = analyzeSchema.safeParse(req.body);
     if(!parsed.success) return res.status(400).json({ error:'Bad payload' });
-    req.body = parsed.data;
-    next();
+    req.body = parsed.data; next();
   },
   async (req,res,next)=>{
     try{
       const { email_content, sender, subject } = req.body;
-      const plan=(req.user.plan||'free').toLowerCase();
+      const plan = (req.user.plan||'free').toLowerCase();
 
       if(req.user.emails_analyzed_this_month >= PLAN_LIMITS[plan])
         return res.status(403).json({ error:'Monthly limit reached' });
 
+      /* hash uses subject but we never store it */
       const hash = require('crypto').createHash('sha256')
                    .update(email_content+sender+subject).digest('hex');
 
@@ -219,17 +205,16 @@ app.post('/analyze',
         [hash, req.user.id]);
 
       const needsReanalyse = cached && cached.plan_at_analysis==='free' && plan!=='free';
-
       if(cached && !needsReanalyse){
         const allowed = PLAN_FEATURES[plan];
         return res.json(allowed.reduce((o,k)=>(o[k]=cached[k],o),{}));
       }
 
-      /* LLM call */
+      /* Claude call */
       const prompt = buildClaudePrompt({
         sender, subject, emailContent: email_content, fields: PLAN_FEATURES[plan]
       });
-      const { content:[{ text }] } = await anthropic.messages.create({
+      const { content:[{text}] } = await anthropic.messages.create({
         model:'claude-3-haiku-20240307',
         max_tokens:1300, temperature:0.5,
         messages:[{ role:'user', content:prompt }]
@@ -237,61 +222,59 @@ app.post('/analyze',
       const parsed = JSON.parse(text);
       if(['null','',null].includes(parsed.deadline)) parsed.deadline = null;
 
-      /* upsert */
+      /* UPSERT (no subject column) */
       const { rows:[row] } = await pool.query(`
         INSERT INTO email_analyses (
-          user_id,email_hash,subject,priority,intent,tone,sentiment,
+          user_id,email_hash,priority,intent,tone,sentiment,
           tasks,deadline,ai_confidence,plan_at_analysis
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         ON CONFLICT (email_hash,user_id) DO UPDATE
-          SET priority=EXCLUDED.priority,intent=EXCLUDED.intent,
-              tone=EXCLUDED.tone,sentiment=EXCLUDED.sentiment,
-              tasks=EXCLUDED.tasks,deadline=EXCLUDED.deadline,
-              ai_confidence=EXCLUDED.ai_confidence,plan_at_analysis=EXCLUDED.plan_at_analysis
+          SET priority         = EXCLUDED.priority,
+              intent           = EXCLUDED.intent,
+              tone             = EXCLUDED.tone,
+              sentiment        = EXCLUDED.sentiment,
+              tasks            = EXCLUDED.tasks,
+              deadline         = EXCLUDED.deadline,
+              ai_confidence    = EXCLUDED.ai_confidence,
+              plan_at_analysis = EXCLUDED.plan_at_analysis
         RETURNING *`,
         [
-          req.user.id, hash, subject,
-          parsed.priority||null, parsed.intent||null, parsed.tone||null,
-          parsed.sentiment||null, parsed.tasks||null, parsed.deadline||null,
-          parsed.confidence||null, plan
+          req.user.id, hash,
+          parsed.priority||null,
+          parsed.intent||null,
+          parsed.tone||null,
+          parsed.sentiment||null,
+          parsed.tasks||null,
+          parsed.deadline||null,
+          parsed.ai_confidence||null,
+          plan
         ]);
 
+      /* usage counters */
       await pool.query(`
-        UPDATE users
-           SET emails_analyzed_this_month = emails_analyzed_this_month + 1,
-               total_emails_ever         = total_emails_ever + 1
-         WHERE id=$1`, [req.user.id]);
+        UPDATE users SET
+          emails_analyzed_this_month = emails_analyzed_this_month + 1,
+          total_emails_ever         = total_emails_ever + 1
+        WHERE id=$1`, [req.user.id]);
 
       const allowed = PLAN_FEATURES[plan];
-      res.json(allowed.reduce((o,k)=>(o[k]=row[k==='confidence'?'ai_confidence':k],o),{}));
+      res.json(allowed.reduce((o,k)=>(o[k]=row[k],o),{}));
     }catch(e){ next(e); }
 });
 
 /* ---- STRIPE WEBHOOK (POST only) ---- */
-app.all('/webhooks/stripe',(req,res,next)=>{
-  if(req.method!=='POST') return res.status(405).end();
-  next();
-});
 app.post('/webhooks/stripe',(req,res)=>{
   const sig=req.headers['stripe-signature'];
   let event;
-  try{
-    event = stripeClient.webhooks.constructEvent(req.body, sig, stripeSecret);
-  }catch(err){
-    console.error('Bad Stripe sig',err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
+  try{ event = stripeClient.webhooks.constructEvent(req.body,sig,stripeSecret); }
+  catch(err){ return res.status(400).send(`Webhook Error: ${err.message}`); }
+
   switch(event.type){
-    case 'invoice.payment_succeeded':
-      // TODO
-      break;
-    case 'customer.subscription.deleted':
-      // TODO
-      break;
-    default:
-      console.log('Unhandled Stripe event →',event.type);
+    case 'invoice.payment_succeeded':   /* TODO */ break;
+    case 'customer.subscription.deleted': /* TODO */ break;
+    default: console.log('Stripe event:',event.type);
   }
-  res.json({ received:true });
+  res.json({received:true});
 });
 
 /* ────────── 9. ERROR HANDLER ────────── */
