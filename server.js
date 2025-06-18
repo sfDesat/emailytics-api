@@ -256,6 +256,8 @@ app.post('/analyze',
   async (req,res,next)=>{
     try{
       const { email_content, sender, subject } = req.body;
+      const plan = (req.user.plan||'free').toLowerCase();
+      
       // Early exit for empty content
             if (!email_content.trim().length < 10) {
         console.warn("📭 Skipping Claude: empty email content");
@@ -301,8 +303,6 @@ app.post('/analyze',
       }
 
       // Continue normal processing
-      const plan = (req.user.plan||'free').toLowerCase();
-
       if (!req.user.consent_given) {
         return res.status(403).json({ error: 'Consent required' });
       }
