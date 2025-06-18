@@ -76,6 +76,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
+        consent_given BOOLEAN DEFAULT FALSE,
         plan  VARCHAR(50)  DEFAULT 'Free',
         stripe_customer_id VARCHAR(255),
         emails_analyzed_this_month INTEGER DEFAULT 0,
@@ -153,6 +154,16 @@ const authenticate = async (req,res,next)=>{
 /* ────────── 8. ROUTES ────────── */
 app.get('/',(_,res)=>res.json({ status:'ok', ts:new Date().toISOString() }));
 
+app.post('/auth/consent', authenticate, async (req, res, next) => {
+  try {
+    await pool.query(
+      'UPDATE users SET consent_given = true, updated_at = NOW() WHERE id = $1',
+      [req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 app.get('/auth/profile', authenticate, (req,res)=>{
   res.json({
     id:req.user.id,
@@ -193,7 +204,12 @@ app.post('/analyze',
       const { email_content, sender, subject } = req.body;
       const plan = (req.user.plan||'free').toLowerCase();
 
-      if(req.user.emails_analyzed_this_month >= PLAN_LIMITS[plan])
+      if (!req.user.consent_given) {
+        return res.status(403).json({ error: 'Consent required' });
+      }
+
+      // ↓ existing checks continue here
+      if (req.user.emails_analyzed_this_month >= PLAN_LIMITS[plan])
         return res.status(403).json({ error:'Monthly limit reached' });
 
       /* hash uses subject but we never store it */
@@ -229,7 +245,7 @@ app.post('/analyze',
       if (typeof confidence !== 'number') confidence = parseFloat(confidence);
       if (isNaN(confidence)) confidence = null;
       else confidence = Math.round(confidence);
-          
+
       const { rows:[row] } = await pool.query(`
         INSERT INTO email_analyses (
           user_id,email_hash,priority,intent,tone,sentiment,
