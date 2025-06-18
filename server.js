@@ -225,6 +225,11 @@ app.post('/analyze',
       console.log('🧠 Claude raw response:', text);
 
       /* UPSERT (no subject column) */
+      let confidence = parsed.ai_confidence;
+      if (typeof confidence !== 'number') confidence = parseFloat(confidence);
+      if (isNaN(confidence)) confidence = null;
+      else confidence = Math.round(confidence);
+          
       const { rows:[row] } = await pool.query(`
         INSERT INTO email_analyses (
           user_id,email_hash,priority,intent,tone,sentiment,
@@ -248,7 +253,7 @@ app.post('/analyze',
           parsed.sentiment||null,
           parsed.tasks||null,
           parsed.deadline||null,
-          Number(parsed.ai_confidence ?? parsed.confidence)||null,
+          confidence,
           plan
         ]);
 

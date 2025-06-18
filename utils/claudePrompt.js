@@ -24,7 +24,7 @@ module.exports = function buildClaudePrompt({
         case 'deadline':
           return `  "deadline": "YYYY-MM-DD" or null${comma}`;
         case 'confidence':
-          return `  "ai_confidence": 0–100 (integer, no quotes, e.g., 87)${comma}`;
+          return `  "ai_confidence": integer (between 0 and 100, no decimals, no quotes)${comma}`;
         default:
           return `  "${f}": "string"${comma}`;
       }
@@ -37,7 +37,7 @@ module.exports = function buildClaudePrompt({
 Return exactly a JSON object matching this schema:
 ${schemaLines}
 
-Do not include explanations. Only output the raw JSON. Confidence must be a number.
+Do not include explanations. Only output the raw JSON. Confidence must be a number, no decimals.
 
 Email:
 Sender: ${sender || 'Unknown'}
