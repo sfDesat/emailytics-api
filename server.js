@@ -63,7 +63,7 @@ const limitUser = (req,res,next)=>
 
 /* ────────── 6. ZOD SCHEMA ────────── */
 const analyzeSchema = z.object({
-  email_content : z.string().min(10).max(10_000),
+  email_content : z.string().min(0).max(10_000),
   sender        : z.string().max(320),
   subject       : z.string().max(500)
 });
@@ -256,6 +256,51 @@ app.post('/analyze',
   async (req,res,next)=>{
     try{
       const { email_content, sender, subject } = req.body;
+      // Early exit for empty content
+            if (!email_content.trim()) {
+        console.warn("📭 Skipping Claude: empty email content");
+        const fallback = {
+          priority: "Low",
+          intent: "Empty message (no content to analyze)",
+          tone: "Neutral",
+          sentiment: "neutral",
+          tasks: [],
+          deadline: null,
+          ai_confidence: 0
+        };
+      
+        // Optionally cache this response
+        const hash = require('crypto').createHash('sha256')
+                     .update(email_content + sender + subject).digest('hex');
+        await pool.query(`
+          INSERT INTO email_analyses (
+            user_id,email_hash,priority,intent,tone,sentiment,
+            tasks,deadline,ai_confidence,plan_at_analysis
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          ON CONFLICT (email_hash,user_id) DO NOTHING
+        `, [
+          req.user.id, hash,
+          fallback.priority,
+          fallback.intent,
+          fallback.tone,
+          fallback.sentiment,
+          fallback.tasks,
+          fallback.deadline,
+          fallback.ai_confidence,
+          plan
+        ]);
+      
+        await pool.query(`
+          UPDATE users SET
+            emails_analyzed_this_month = emails_analyzed_this_month + 1,
+            total_emails_ever         = total_emails_ever + 1
+          WHERE id=$1`, [req.user.id]);
+        
+        const allowed = PLAN_FEATURES[plan];
+        return res.json(allowed.reduce((o, k) => (o[k] = fallback[k], o), {}));
+      }
+
+      // Continue normal processing
       const plan = (req.user.plan||'free').toLowerCase();
 
       if (!req.user.consent_given) {
