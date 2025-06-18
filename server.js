@@ -222,6 +222,8 @@ app.post('/analyze',
       const parsed = JSON.parse(text);
       if(['null','',null].includes(parsed.deadline)) parsed.deadline = null;
 
+      console.log('🧠 Claude raw response:', text);
+
       /* UPSERT (no subject column) */
       const { rows:[row] } = await pool.query(`
         INSERT INTO email_analyses (
@@ -246,7 +248,7 @@ app.post('/analyze',
           parsed.sentiment||null,
           parsed.tasks||null,
           parsed.deadline||null,
-          Number(parsed.ai_confidence)||null,
+          Number(parsed.ai_confidence ?? parsed.confidence)||null,
           plan
         ]);
 
