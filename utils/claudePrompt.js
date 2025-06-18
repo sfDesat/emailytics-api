@@ -1,10 +1,3 @@
-/**
- * buildClaudePrompt.js
- *
- * Dynamically constructs a JSON‐schema prompt
- * based on the exact fields your plan supports.
- */
-
 module.exports = function buildClaudePrompt({
   sender,
   subject,
@@ -39,10 +32,12 @@ module.exports = function buildClaudePrompt({
     '}'
   ].join('\n');
 
-  return `You are an expert email assistant that analyzes emails and extract key information.
+  return `You are an expert email assistant that analyzes emails and extract key information in JSON only.
   
 Return exactly a JSON object matching this schema:
 ${schemaLines}
+
+Do not include explanations. Only output the raw JSON. Confidence must be a number.
 
 Email:
 Sender: ${sender || 'Unknown'}
