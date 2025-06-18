@@ -257,7 +257,7 @@ app.post('/analyze',
     try{
       const { email_content, sender, subject } = req.body;
       // Early exit for empty content
-            if (!email_content.trim()) {
+            if (!email_content.trim().length < 10) {
         console.warn("📭 Skipping Claude: empty email content");
         const fallback = {
           priority: "Low",
@@ -336,8 +336,6 @@ app.post('/analyze',
       });
       const parsed = JSON.parse(text);
       if(['null','',null].includes(parsed.deadline)) parsed.deadline = null;
-
-      console.log('🧠 Claude raw response:', text);
 
       /* UPSERT (no subject column) */
       let confidence = parsed.ai_confidence;
