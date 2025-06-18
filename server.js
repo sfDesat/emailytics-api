@@ -263,10 +263,10 @@ app.post('/analyze',
         console.warn("📭 Skipping Claude: empty email content");
         const fallback = {
           priority: "Low",
-          intent: "Empty message (no content to analyze)",
-          tone: "Neutral",
-          sentiment: "neutral",
-          tasks: [],
+          intent: "Message is empty",
+          tone: "None",
+          sentiment: "None",
+          tasks: ["No tasks found"],
           deadline: null,
           ai_confidence: 0
         };
