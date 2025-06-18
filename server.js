@@ -257,9 +257,9 @@ app.post('/analyze',
     try{
       const { email_content, sender, subject } = req.body;
       const plan = (req.user.plan||'free').toLowerCase();
-      
+
       // Early exit for empty content
-            if (!email_content.trim().length < 10) {
+            if (email_content.trim().length < 10) {
         console.warn("📭 Skipping Claude: empty email content");
         const fallback = {
           priority: "Low",
