@@ -264,9 +264,9 @@ app.post('/analyze',
         const fallback = {
           priority: "Low",
           intent: "Message is empty",
-          tone: "None",
-          sentiment: "None",
-          tasks: ["No tasks found"],
+          tone: null,
+          sentiment: null,
+          tasks: [],
           deadline: null,
           ai_confidence: 0
         };
