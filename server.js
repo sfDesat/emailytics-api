@@ -15,11 +15,19 @@ const { createClient } = require('@supabase/supabase-js');
 const buildClaudePrompt = require('./utils/claudePrompt');
 require('dotenv').config();
 
-/* We only need a quick upper-bound, not perfect token maths  */
-const roughTokenCount = str => Math.ceil(str.length / 4);   // 4 chars ≈ 1 token
+/* ─── helpers ─────────────────────────────────────────── */
+const makeHash = (sender, subject, time = '') =>
+  require('crypto')
+    .createHash('sha256')
+    .update(`${sender}|${subject}|${time}`)
+    .digest('hex');
+
+/* fast & sloppy token upper-bound (Haiku doesn’t need exact) */
+const roughTokenCount = str => Math.ceil(str.length / 4); // 4 chars ≈ 1 tok
 const roughTrim       = (str, maxTok = 1500) =>
   roughTokenCount(str) <= maxTok ? str : str.slice(0, maxTok * 4);
 
+/* ─── express boilerplate ─────────────────────────────── */
 const app  = express();
 const port = process.env.PORT || 3000;
 app.set('trust proxy', 1);
@@ -70,7 +78,8 @@ const limitUser = (req,res,next)=>
 const analyzeSchema = z.object({
   email_content : z.string().min(0).max(10_000),
   sender        : z.string().max(320),
-  subject       : z.string().max(500)
+  subject       : z.string().max(500),
+  time          : z.string().optional().default("")
 });
 
 // ─── 7. Initialize Tables & Indexes ─────────────────────────
@@ -164,7 +173,7 @@ const authenticate = async (req, res, next) => {
   }
 };
 
-/* ────────── 8. ROUTES ────────── */
+/* ────────── 9. ROUTES ────────── */
 app.get('/',(_,res)=>res.json({ status:'ok', ts:new Date().toISOString() }));
 
 app.post('/auth/consent', authenticate, async (req, res, next) => {
@@ -260,28 +269,21 @@ app.post('/analyze',
   },
   async (req,res,next)=>{
     try{
-      let { email_content, sender, subject } = req.body;
+      let { email_content, sender, subject, time } = req.body;
       const plan = (req.user.plan||'free').toLowerCase();
 
       email_content = roughTrim(email_content, 1500);
 
-      // Early exit for empty content
-            if (email_content.trim().length < 10) {
-        console.warn("📭 Skipping Claude: empty email content");
+      /* ─── build the hash ONCE and reuse ─── */
+      const emailHash = makeHash(sender, subject, time);
+
+      /* ─── Early exit: empty body ─── */
+      if (email_content.trim().length < 10) {
         const fallback = {
-          priority: "Low",
-          intent: "Message is empty",
-          tone: null,
-          sentiment: null,
-          tasks: [],
-          deadline: null,
-          ai_confidence: 0
+          priority:"Low", intent:"Message is empty",
+          tone:null, sentiment:null, tasks:[], deadline:null, ai_confidence:0
         };
       
-        // Optionally cache this response
-        const timeKey = req.body.time || '';
-        const hash = require('crypto').createHash('sha256')
-                     .update(`${sender}|${subject}|${timeKey}`).digest('hex');
         await pool.query(`
           INSERT INTO email_analyses (
             user_id,email_hash,priority,intent,tone,sentiment,
@@ -310,46 +312,39 @@ app.post('/analyze',
         return res.json(allowed.reduce((o, k) => (o[k] = fallback[k], o), {}));
       }
 
-      // Continue normal processing
-      if (!req.user.consent_given) {
-        return res.status(403).json({ error: 'Consent required' });
-      }
-
-      // ↓ existing checks continue here
+      /* ─── permission / quota checks ─── */
+      if (!req.user.consent_given)
+        return res.status(403).json({ error:'Consent required' });
       if (req.user.emails_analyzed_this_month >= PLAN_LIMITS[plan])
         return res.status(403).json({ error:'Monthly limit reached' });
 
-      /* hash uses subject but we never store it */
-      const hash = require('crypto').createHash('sha256')
-                   .update(email_content+sender+subject).digest('hex');
-
-      const { rows:[cached] } = await pool.query(
-        'SELECT * FROM email_analyses WHERE email_hash=$1 AND user_id=$2',
-        [hash, req.user.id]);
-
-      const needsReanalyse = cached && cached.plan_at_analysis==='free' && plan!=='free';
-      if(cached && !needsReanalyse){
+      /* ─── cache hit? ─── */
+      const { rows:[cached] } =
+        await pool.query('SELECT * FROM email_analyses WHERE email_hash=$1 AND user_id=$2',
+                         [emailHash,req.user.id]);
+      const needsUpgrade = cached && cached.plan_at_analysis==='free' && plan!=='free';
+      if (cached && !needsUpgrade) {
         const allowed = PLAN_FEATURES[plan];
         return res.json(allowed.reduce((o,k)=>(o[k]=cached[k],o),{}));
       }
 
-      /* Claude call */
+      /* ─── call Claude ─── */
       const prompt = buildClaudePrompt({
-        sender, subject, emailContent: email_content, fields: PLAN_FEATURES[plan]
+        sender, subject, emailContent:email_content, fields:PLAN_FEATURES[plan]
       });
-      const { content:[{text}] } = await anthropic.messages.create({
+      const { content:[{ text }] } = await anthropic.messages.create({
         model:'claude-3-haiku-20240307',
-        max_tokens:1300, temperature:0.5,
+        max_tokens:1500, temperature:0.5,
         messages:[{ role:'user', content:prompt }]
       });
       const parsed = JSON.parse(text);
       if(['null','',null].includes(parsed.deadline)) parsed.deadline = null;
 
-      /* UPSERT (no subject column) */
+      /* normalise confidence */
       let confidence = parsed.ai_confidence;
       if (typeof confidence !== 'number') confidence = parseFloat(confidence);
-      if (isNaN(confidence)) confidence = null;
-      else confidence = Math.round(confidence);
+      if (Number.isNaN(confidence)) confidence = null;
+      if (confidence!=null) confidence=Math.round(confidence);
 
       const { rows:[row] } = await pool.query(`
         INSERT INTO email_analyses (
@@ -405,13 +400,13 @@ app.post('/webhooks/stripe',(req,res)=>{
   res.json({received:true});
 });
 
-/* ────────── 9. ERROR HANDLER ────────── */
+/* ────────── 10. ERROR HANDLER ────────── */
 app.use((err,req,res,_next)=>{
   console.error('Unhandled error →',err);
   res.status(500).json({ error:'Internal server error' });
 });
 
-/* ────────── 10. BOOTSTRAP ────────── */
+/* ────────── 11. BOOTSTRAP ────────── */
 initializeDatabase().then(()=>{
   app.listen(port,()=>console.log(`🚀 Server ready on ${port}`)); 
 });
