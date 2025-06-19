@@ -79,7 +79,7 @@ const analyzeSchema = z.object({
   email_content : z.string().min(0).max(10_000),
   sender        : z.string().max(320),
   subject       : z.string().max(500),
-  time          : z.string().optional().default("")
+  time          : z.string().min(1, "time is required")
 });
 
 // ─── 7. Initialize Tables & Indexes ─────────────────────────
@@ -269,7 +269,10 @@ app.post('/analyze',
   },
   async (req,res,next)=>{
     try{
-      let { email_content, sender, subject, time } = req.body;
+      if (!time || time === "0" || time.toLowerCase?.() === "unknown") {
+        return res.status(400).json({ error: "Missing or invalid time field" });
+      }
+      
       sender  ||= 'Unknown';
       subject ||= '(No Subject)';
       const plan = (req.user.plan||'free').toLowerCase();
