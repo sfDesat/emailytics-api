@@ -16,16 +16,17 @@ const buildClaudePrompt = require('./utils/claudePrompt');
 require('dotenv').config();
 
 /* ─── helpers ─────────────────────────────────────────── */
-const makeHash = (sender, subject, time = '') =>
+const makeHash = (sender = 'Unknown',
+                  subject = '(No Subject)',
+                  time = '') =>
   require('crypto')
     .createHash('sha256')
     .update(`${sender}|${subject}|${time}`)
     .digest('hex');
 
-/* fast & sloppy token upper-bound (Haiku doesn’t need exact) */
-const roughTokenCount = str => Math.ceil(str.length / 4); // 4 chars ≈ 1 tok
-const roughTrim       = (str, maxTok = 1500) =>
-  roughTokenCount(str) <= maxTok ? str : str.slice(0, maxTok * 4);
+const roughTokenCount = str => Math.ceil(str.length / 4);  // fast upper-bound
+const roughTrim       = (str,maxTok=1500)=>
+  roughTokenCount(str)<=maxTok?str:str.slice(0,maxTok*4);
 
 /* ─── express boilerplate ─────────────────────────────── */
 const app  = express();
@@ -69,9 +70,8 @@ app.use(express.json({ limit:'10mb' }));
 
 /* ────────── 5. PER-USER RATE-LIMIT ────────── */
 const limiterPerUser = new RateLimiterMemory({ points:30, duration:60 });
-const limitUser = (req,res,next)=>
-  limiterPerUser.consume(String(req.user.id))
-  .then(()=>next())
+const limitUser = (req,res,next)=>limiterPerUser
+  .consume(String(req.user.id)).then(()=>next())
   .catch(()=>res.status(429).json({ error:'Too many requests' }));
 
 /* ────────── 6. ZOD SCHEMA ────────── */
@@ -264,71 +264,63 @@ app.post('/analyze',
   limitUser,
   (req,res,next)=>{
     const parsed = analyzeSchema.safeParse(req.body);
-    if(!parsed.success) return res.status(400).json({ error:'Bad payload' });
+    if (!parsed.success) return res.status(400).json({ error:'Bad payload' });
     req.body = parsed.data; next();
   },
   async (req,res,next)=>{
     try{
       let { email_content, sender, subject, time } = req.body;
+      sender  ||= 'Unknown';
+      subject ||= '(No Subject)';
       const plan = (req.user.plan||'free').toLowerCase();
 
-      email_content = roughTrim(email_content, 1500);
+      email_content = roughTrim(email_content,1500);
+      const emailHash = makeHash(sender,subject,time);
 
-      /* ─── build the hash ONCE and reuse ─── */
-      const emailHash = makeHash(sender, subject, time);
-
-      /* ─── Early exit: empty body ─── */
+      /* empty mail → cheap fallback */
       if (email_content.trim().length < 10) {
         const fallback = {
-          priority:"Low", intent:"Message is empty",
-          tone:null, sentiment:null, tasks:[], deadline:null, ai_confidence:0
+          priority:'Low', intent:'Message is empty',
+          tone:null,sentiment:null,tasks:[],deadline:null,ai_confidence:0
         };
-      
+
         await pool.query(`
           INSERT INTO email_analyses (
             user_id,email_hash,priority,intent,tone,sentiment,
             tasks,deadline,ai_confidence,plan_at_analysis
           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-          ON CONFLICT (email_hash,user_id) DO NOTHING
-        `, [
-          req.user.id, hash,
-          fallback.priority,
-          fallback.intent,
-          fallback.tone,
-          fallback.sentiment,
-          fallback.tasks,
-          fallback.deadline,
-          fallback.ai_confidence,
-          plan
-        ]);
-      
+          ON CONFLICT (email_hash,user_id) DO NOTHING`,
+          [req.user.id,emailHash,
+           fallback.priority,fallback.intent,fallback.tone,fallback.sentiment,
+           fallback.tasks,fallback.deadline,fallback.ai_confidence,plan]);
+
         await pool.query(`
           UPDATE users SET
             emails_analyzed_this_month = emails_analyzed_this_month + 1,
-            total_emails_ever         = total_emails_ever + 1
-          WHERE id=$1`, [req.user.id]);
-        
+            total_emails_ever          = total_emails_ever + 1
+          WHERE id=$1`,[req.user.id]);
+
         const allowed = PLAN_FEATURES[plan];
-        return res.json(allowed.reduce((o, k) => (o[k] = fallback[k], o), {}));
+        return res.json(allowed.reduce((o,k)=>(o[k]=fallback[k],o),{}));
       }
 
-      /* ─── permission / quota checks ─── */
+      /* consent / quota */
       if (!req.user.consent_given)
         return res.status(403).json({ error:'Consent required' });
       if (req.user.emails_analyzed_this_month >= PLAN_LIMITS[plan])
         return res.status(403).json({ error:'Monthly limit reached' });
 
-      /* ─── cache hit? ─── */
-      const { rows:[cached] } =
-        await pool.query('SELECT * FROM email_analyses WHERE email_hash=$1 AND user_id=$2',
-                         [emailHash,req.user.id]);
+      /* cache hit? */
+      const { rows:[cached] } = await pool.query(
+        'SELECT * FROM email_analyses WHERE email_hash=$1 AND user_id=$2',
+        [emailHash,req.user.id]);
       const needsUpgrade = cached && cached.plan_at_analysis==='free' && plan!=='free';
       if (cached && !needsUpgrade) {
         const allowed = PLAN_FEATURES[plan];
         return res.json(allowed.reduce((o,k)=>(o[k]=cached[k],o),{}));
       }
 
-      /* ─── call Claude ─── */
+      /* call Claude */
       const prompt = buildClaudePrompt({
         sender, subject, emailContent:email_content, fields:PLAN_FEATURES[plan]
       });
@@ -340,10 +332,10 @@ app.post('/analyze',
       const parsed = JSON.parse(text);
       if(['null','',null].includes(parsed.deadline)) parsed.deadline = null;
 
-      /* normalise confidence */
+      /* confidence normalisation */
       let confidence = parsed.ai_confidence;
-      if (typeof confidence !== 'number') confidence = parseFloat(confidence);
-      if (Number.isNaN(confidence)) confidence = null;
+      if (typeof confidence!=='number') confidence=parseFloat(confidence);
+      if (Number.isNaN(confidence)) confidence=null;
       if (confidence!=null) confidence=Math.round(confidence);
 
       const { rows:[row] } = await pool.query(`
@@ -361,28 +353,20 @@ app.post('/analyze',
               ai_confidence    = EXCLUDED.ai_confidence,
               plan_at_analysis = EXCLUDED.plan_at_analysis
         RETURNING *`,
-        [
-          req.user.id, hash,
-          parsed.priority||null,
-          parsed.intent||null,
-          parsed.tone||null,
-          parsed.sentiment||null,
-          parsed.tasks||null,
-          parsed.deadline||null,
-          confidence,
-          plan
-        ]);
+        [req.user.id,emailHash,
+         parsed.priority||null,parsed.intent||null,parsed.tone||null,
+         parsed.sentiment||null,parsed.tasks||null,parsed.deadline||null,
+         confidence,plan]);
 
-      /* usage counters */
       await pool.query(`
         UPDATE users SET
           emails_analyzed_this_month = emails_analyzed_this_month + 1,
-          total_emails_ever         = total_emails_ever + 1
-        WHERE id=$1`, [req.user.id]);
+          total_emails_ever          = total_emails_ever + 1
+        WHERE id=$1`,[req.user.id]);
 
       const allowed = PLAN_FEATURES[plan];
       res.json(allowed.reduce((o,k)=>(o[k]=row[k],o),{}));
-    }catch(e){ next(e); }
+    }catch(err){ next(err); }
 });
 
 /* ---- STRIPE WEBHOOK (POST only) ---- */
