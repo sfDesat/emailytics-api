@@ -260,7 +260,7 @@ app.post('/analyze',
   },
   async (req,res,next)=>{
     try{
-      const { email_content, sender, subject } = req.body;
+      let { email_content, sender, subject } = req.body;
       const plan = (req.user.plan||'free').toLowerCase();
 
       email_content = roughTrim(email_content, 1500);
