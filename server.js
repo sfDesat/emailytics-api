@@ -269,6 +269,9 @@ app.post('/analyze',
   },
   async (req,res,next)=>{
     try{
+      let { email_content, sender, subject, time } = req.body;
+          
+      // guard: we only process when the Gmail tooltip produced a real timestamp
       if (!time || time === "0" || time.toLowerCase?.() === "unknown") {
         return res.status(400).json({ error: "Missing or invalid time field" });
       }
