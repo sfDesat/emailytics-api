@@ -13,10 +13,9 @@ const stripe   = require('stripe');
 const { Anthropic } = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
 const buildClaudePrompt = require('./utils/claudePrompt');
-const { getEncoding }  = require('@anthropic-ai/tokenizer');
+const { encode, decode } = require('@anthropic-ai/tokenizer');
 require('dotenv').config();
 
-const tokenizer = getEncoding('cl100k_base');  // for Claude 3 Haiku
 const app  = express();
 const port = process.env.PORT || 3000;
 app.set('trust proxy', 1);
@@ -260,9 +259,9 @@ app.post('/analyze',
       const { email_content, sender, subject } = req.body;
       const plan = (req.user.plan||'free').toLowerCase();
 
-      const tokens = tokenizer.encode(email_content);
+      const tokens = encode(email_content);
       if (tokens.length > 1500) {
-        email_content = tokenizer.decode(tokens.slice(0, 1500));
+        email_content = decode(tokens.slice(0, 1500));
       }
 
       // Early exit for empty content
