@@ -13,7 +13,7 @@ const stripe   = require('stripe');
 const { Anthropic } = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
 const buildClaudePrompt = require('./utils/claudePrompt');
-const { encode, decode } = require('@anthropic-ai/tokenizer');
+const { tokenizer } = require('@anthropic-ai/tokenizer');
 require('dotenv').config();
 
 const app  = express();
@@ -259,9 +259,9 @@ app.post('/analyze',
       const { email_content, sender, subject } = req.body;
       const plan = (req.user.plan||'free').toLowerCase();
 
-      const tokens = encode(email_content);
+      const tokens = tokenizer.encode(email_content);        // ⇢ Uint32Array
       if (tokens.length > 1500) {
-        email_content = decode(tokens.slice(0, 1500));
+        email_content = tokenizer.decode(tokens.slice(0, 1500));
       }
 
       // Early exit for empty content
