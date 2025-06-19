@@ -13,8 +13,12 @@ const stripe   = require('stripe');
 const { Anthropic } = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
 const buildClaudePrompt = require('./utils/claudePrompt');
-const { tokenizer } = require('@anthropic-ai/tokenizer');
 require('dotenv').config();
+
+/* We only need a quick upper-bound, not perfect token maths  */
+const roughTokenCount = str => Math.ceil(str.length / 4);   // 4 chars ≈ 1 token
+const roughTrim       = (str, maxTok = 1500) =>
+  roughTokenCount(str) <= maxTok ? str : str.slice(0, maxTok * 4);
 
 const app  = express();
 const port = process.env.PORT || 3000;
@@ -259,10 +263,7 @@ app.post('/analyze',
       const { email_content, sender, subject } = req.body;
       const plan = (req.user.plan||'free').toLowerCase();
 
-      const tokens = tokenizer.encode(email_content);        // ⇢ Uint32Array
-      if (tokens.length > 1500) {
-        email_content = tokenizer.decode(tokens.slice(0, 1500));
-      }
+      email_content = roughTrim(email_content, 1500);
 
       // Early exit for empty content
             if (email_content.trim().length < 10) {
