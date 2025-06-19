@@ -23,7 +23,8 @@
     "pg": "^8.11.3",
     "stripe": "^14.21.0",
     "rate-limiter-flexible": "^7.1.0",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "@anthropic-ai/tokenizer": "^0.0.4"
   },
 
   "devDependencies": {
